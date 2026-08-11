@@ -6,6 +6,7 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://task_user:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/tasks
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+      SERVER_URL: ${SERVER_URL:?Set SERVER_URL in .env}
       APP_ENV: development
     depends_on:
       db:

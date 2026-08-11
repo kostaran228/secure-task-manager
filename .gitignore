@@ -6,3 +6,7 @@ tasks.db
 .dev.vars
 cloudflare-worker/.wrangler/
 monitoring/grafana-data/
+mobile/node_modules/
+mobile/android/.gradle/
+mobile/android/build/
+mobile/android/app/build/

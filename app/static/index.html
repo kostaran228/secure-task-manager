@@ -33,10 +33,12 @@
           </div>
           <div id="signed-in" class="signed-in" hidden><p>✓ You are signed in as</p><strong id="current-email"></strong><button id="forget-token" class="secondary" type="button">Sign out</button></div>
           <div id="message" class="message"></div>
+          <div id="group-panel" hidden><h2>Team groups</h2><input id="new-group-name" maxlength="120" placeholder="New group name"><button id="create-group" type="button">Create group</button><div id="group-list" class="hint"></div><input id="member-email" type="email" placeholder="Member email"><select id="member-role"><option value="member">Member</option><option value="manager">Manager</option><option value="admin">Admin</option></select><button id="save-member" class="secondary" type="button">Add member</button></div>
           <h2 style="margin-top:28px">Create task</h2>
           <form id="task-form">
             <label for="title">Title</label><input id="title" maxlength="200" required placeholder="Example: prepare deployment demo">
             <label for="description">Description</label><textarea id="description" maxlength="1000" placeholder="Optional details"></textarea>
+            <label for="task-group">Group</label><select id="task-group"><option value="">Personal task</option></select><input id="assignee-email" type="email" placeholder="Assignee email for group task" hidden>
             <label class="reminder-toggle"><input id="reminder-enabled" type="checkbox"> Set a reminder</label>
             <div id="reminder-options" hidden><label for="reminder-at">Remind me at</label><input id="reminder-at" type="datetime-local"></div>
             <button id="enable-notifications" class="secondary" type="button">Enable browser notifications</button>
@@ -66,6 +68,17 @@
       document.querySelector('#task-form').onsubmit=async(event)=>{ event.preventDefault(); try { if (reminderEnabled.checked && !reminderAt.value) throw new Error('Choose a reminder date and time.'); const response=await fetch('/tasks',{method:'POST',headers:headers(),body:JSON.stringify({title:document.querySelector('#title').value,description:document.querySelector('#description').value||null,reminder_at:reminderEnabled.checked?reminderAt.value:null})}); if (!response.ok) throw new Error(response.status===401?'Sign in before creating tasks.':'Unable to create task.'); event.target.reset(); reminderOptions.hidden=true; await loadTasks(); note('Task created.'); } catch(error) { note(error.message,true); } };
       fetch('/health').then(response=>{ if(!response.ok) throw new Error(); document.querySelector('#health').textContent='● Service online'; document.querySelector('#health').classList.add('ok'); }).catch(()=>{ document.querySelector('#health').textContent='● Service unavailable'; });
       if (accessToken) refreshIdentity().then(loadTasks).catch(error=>{ sessionStorage.removeItem('taskManagerAccessToken'); accessToken=''; showSignedOut(); note(error.message,true); });
+    </script>
+    <script>
+      const groupPanel=document.querySelector('#group-panel'), groupSelect=document.querySelector('#task-group'), assigneeInput=document.querySelector('#assignee-email');
+      async function refreshGroups(){ if(!accessToken) return; const response=await fetch('/groups',{headers:headers()}); if(!response.ok) return; const groups=await response.json(); groupPanel.hidden=false; groupSelect.innerHTML='<option value="">Personal task</option>'+groups.map(g=>`<option value="${g.id}">${escapeHtml(g.name)} (${g.role})</option>`).join(''); document.querySelector('#group-list').innerHTML=groups.length?groups.map(g=>`${escapeHtml(g.name)} — ${g.role}`).join('<br>'):'No groups yet.'; }
+      document.querySelector('#create-group').onclick=async()=>{ try{const response=await fetch('/groups',{method:'POST',headers:headers(),body:JSON.stringify({name:document.querySelector('#new-group-name').value})}); const body=await response.json(); if(!response.ok) throw new Error(body.detail); document.querySelector('#new-group-name').value=''; await refreshGroups(); note('Group created. You are Admin.');}catch(error){note(error.message,true);} };
+      groupSelect.onchange=()=>{assigneeInput.hidden=!groupSelect.value;};
+      document.querySelector('#save-member').onclick=async()=>{try{if(!groupSelect.value) throw new Error('Choose a group.'); const response=await fetch(`/groups/${groupSelect.value}/members`,{method:'POST',headers:headers(),body:JSON.stringify({email:document.querySelector('#member-email').value,role:document.querySelector('#member-role').value})}); const body=await response.json(); if(!response.ok) throw new Error(body.detail); note('Member updated.');}catch(error){note(error.message,true);}};
+      const originalRefresh=refreshIdentity; refreshIdentity=async()=>{await originalRefresh(); await refreshGroups();};
+      const originalSignOut=document.querySelector('#forget-token').onclick; document.querySelector('#forget-token').onclick=()=>{originalSignOut(); groupPanel.hidden=true;};
+      document.querySelector('#task-form').onsubmit=async(event)=>{event.preventDefault(); try{if(reminderEnabled.checked&&!reminderAt.value) throw new Error('Choose a reminder date and time.'); const groupId=groupSelect.value; const response=await fetch('/tasks',{method:'POST',headers:headers(),body:JSON.stringify({title:document.querySelector('#title').value,description:document.querySelector('#description').value||null,reminder_at:reminderEnabled.checked?reminderAt.value:null,group_id:groupId?Number(groupId):null,assignee_email:groupId?assigneeInput.value:null})}); const body=await response.json(); if(!response.ok) throw new Error(body.detail||'Unable to create task.'); event.target.reset(); assigneeInput.hidden=true; reminderOptions.hidden=true; await loadTasks(); note('Task created.');}catch(error){note(error.message,true);}};
+      if(accessToken) refreshGroups();
     </script>
   </body>
 </html>

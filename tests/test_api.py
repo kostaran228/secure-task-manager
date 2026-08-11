@@ -72,3 +72,30 @@ def test_task_routes_require_sign_in() -> None:
     response = TestClient(main.app).get("/tasks")
 
     assert response.status_code == 401
+
+
+def test_manager_can_assign_only_to_members() -> None:
+    client = TestClient(main.app)
+
+    def register(role: str) -> tuple[str, str]:
+        email = f"{role}-{uuid4()}@example.com"
+        token = client.post("/auth/register", json={"email": email, "password": "test-password"}).json()["access_token"]
+        return email, token
+
+    admin_email, admin_token = register("admin")
+    manager_email, manager_token = register("manager")
+    member_email, member_token = register("member")
+    admin_headers = {"Authorization": f"Bearer {admin_token}"}
+    group_id = client.post("/groups", headers=admin_headers, json={"name": "Portfolio team"}).json()["id"]
+    client.post(f"/groups/{group_id}/members", headers=admin_headers, json={"email": manager_email, "role": "manager"})
+    client.post(f"/groups/{group_id}/members", headers=admin_headers, json={"email": member_email, "role": "member"})
+    manager_headers = {"Authorization": f"Bearer {manager_token}"}
+    member_headers = {"Authorization": f"Bearer {member_token}"}
+
+    assigned = client.post("/tasks", headers=manager_headers, json={"title": "Prepare demo", "group_id": group_id, "assignee_email": member_email})
+    blocked = client.post("/tasks", headers=manager_headers, json={"title": "Override admin", "group_id": group_id, "assignee_email": admin_email})
+    member_blocked = client.post("/tasks", headers=member_headers, json={"title": "Assign task", "group_id": group_id, "assignee_email": member_email})
+
+    assert assigned.status_code == 201
+    assert blocked.status_code == 403
+    assert member_blocked.status_code == 403

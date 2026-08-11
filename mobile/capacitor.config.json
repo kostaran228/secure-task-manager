@@ -1,0 +1,9 @@
+{
+  "appId": "com.kostaran.securetaskmanager",
+  "appName": "Secure Task Manager",
+  "webDir": "www",
+  "server": {
+    "url": "http://192.168.0.100:8000",
+    "cleartext": true
+  }
+}
