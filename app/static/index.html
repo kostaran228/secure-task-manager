@@ -21,7 +21,7 @@
     <main>
       <header>
         <div><h1>Secure Task Manager</h1><p>Local task dashboard with protected API access.</p></div>
-        <div id="health" class="status">Checking service…</div>
+        <div><select id="language" aria-label="Language"><option value="en">EN</option><option value="ru">RU</option></select><div id="health" class="status">Checking service…</div></div>
       </header>
       <section class="grid">
         <div class="card">
@@ -49,6 +49,7 @@
       </section>
     </main>
     <script>
+      const languageSelect=document.querySelector('#language'); const translations={ru:{'Secure Task Manager':'Менеджер задач','Local task dashboard with protected API access.':'Локальный менеджер задач','Account':'Аккаунт','Create account':'Создать аккаунт','Sign in':'Войти','Sign out':'Выйти','Create task':'Создать задачу','Title':'Название','Description':'Описание','Set a reminder':'Поставить напоминание','Remind me at':'Напомнить в','Enable browser notifications':'Включить уведомления','Tasks':'Задачи','Personal task':'Личная задача','Group':'Группа','Team groups':'Командные группы','Create group':'Создать группу','New group name':'Название новой группы','Add member':'Добавить участника','Member':'Участник','Manager':'Менеджер','Admin':'Администратор'}}; const reverse=Object.fromEntries(Object.entries(translations.ru).map(([en,ru])=>[ru,en])); function applyLanguage(lang){document.documentElement.lang=lang;const map=lang==='ru'?translations.ru:reverse;document.querySelectorAll('h1,h2,label,button,option,p,small').forEach(node=>{const text=node.textContent.trim();if(map[text])node.textContent=map[text];});localStorage.setItem('taskManagerLanguage',lang);} languageSelect.value=localStorage.getItem('taskManagerLanguage')||'en';languageSelect.onchange=()=>applyLanguage(languageSelect.value);applyLanguage(languageSelect.value);
       const emailInput = document.querySelector('#email'); const passwordInput = document.querySelector('#password'); const message = document.querySelector('#message'); const tasks = document.querySelector('#tasks'); const reminderEnabled = document.querySelector('#reminder-enabled'); const reminderOptions = document.querySelector('#reminder-options'); const reminderAt = document.querySelector('#reminder-at'); const notifiedReminders = new Set(JSON.parse(localStorage.getItem('notifiedReminders') || '[]'));
       let accessToken = sessionStorage.getItem('taskManagerAccessToken') || '';
       const headers = () => ({ 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' });
