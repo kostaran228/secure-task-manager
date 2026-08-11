@@ -41,13 +41,14 @@ def test_create_and_list_task() -> None:
 
     created = client.post(
         "/tasks",
-        json={"title": "Write CI pipeline", "description": "Portfolio milestone"},
+        json={"title": "Write CI pipeline", "description": "Portfolio milestone", "reminder_at": "2026-12-31T15:30:00"},
         headers=auth_headers,
     )
     tasks = client.get("/tasks", headers=auth_headers)
 
     assert created.status_code == 201
     assert created.json()["title"] == "Write CI pipeline"
+    assert created.json()["reminder_at"] == "2026-12-31T15:30:00"
     assert tasks.status_code == 200
     assert any(task["id"] == created.json()["id"] for task in tasks.json())
 

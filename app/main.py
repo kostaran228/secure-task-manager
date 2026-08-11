@@ -31,6 +31,7 @@ class Task(Base):
     description: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     owner_id: Mapped[int | None] = mapped_column(nullable=True, index=True)
+    reminder_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class User(Base):
@@ -45,6 +46,7 @@ class User(Base):
 class TaskCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=1000)
+    reminder_at: datetime | None = None
 
 
 class TaskRead(TaskCreate):
@@ -88,6 +90,7 @@ def create_tables() -> None:
     with engine.begin() as connection:
         if connection.dialect.name == "postgresql":
             connection.exec_driver_sql("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS owner_id INTEGER")
+            connection.exec_driver_sql("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS reminder_at TIMESTAMP")
 
 
 def normalized_email(email: str) -> str:
