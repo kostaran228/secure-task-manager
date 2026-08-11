@@ -4,7 +4,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: postgresql+psycopg://task_user:task_password@db:5432/tasks
+      DATABASE_URL: postgresql+psycopg://task_user:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/tasks
     depends_on:
       db:
         condition: service_healthy
@@ -20,7 +20,7 @@ services:
     environment:
       POSTGRES_DB: tasks
       POSTGRES_USER: task_user
-      POSTGRES_PASSWORD: task_password
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U task_user -d tasks"]
       interval: 5s
