@@ -60,6 +60,19 @@ def cloudflared_executable() -> str | None:
 class DesktopServerApi:
     """Methods exposed only to the local desktop WebView."""
 
+    tunnel_process: subprocess.Popen[str] | None = None
+    tunnel_url: str | None = None
+
+    @staticmethod
+    def _read_tunnel_output(process: subprocess.Popen[str]) -> None:
+        if process.stdout is None:
+            return
+        for line in process.stdout:
+            match = re.search(r"https://[-a-z0-9]+\\.trycloudflare\\.com", line, re.I)
+            if match:
+                DesktopServerApi.tunnel_url = match.group(0)
+                return
+
     @staticmethod
     def server_status() -> dict[str, bool]:
         return {"running": Launcher.server_is_ready()}
@@ -89,18 +102,11 @@ class DesktopServerApi:
         if not Launcher.server_is_ready():
             return {"ok": False, "message": "Start the server first"}
         try:
-            DesktopServerApi.tunnel_process = subprocess.Popen([executable, "tunnel", "--url", APP_URL], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, creationflags=WINDOWS_NO_CONSOLE)
-            deadline = time.time() + 20
-            while time.time() < deadline:
-                line = DesktopServerApi.tunnel_process.stdout.readline() if DesktopServerApi.tunnel_process.stdout else ""
-                match = re.search(r"https://[-a-z0-9]+\\.trycloudflare\\.com", line, re.I)
-                if match:
-                    DesktopServerApi.tunnel_url = match.group(0)
-                    return {"ok": True, "running": True, "url": DesktopServerApi.tunnel_url}
-                if DesktopServerApi.tunnel_process.poll() is not None:
-                    break
-            DesktopServerApi.stop_tunnel()
-            return {"ok": False, "message": "Cloudflare Tunnel did not return an address"}
+            process = subprocess.Popen([executable, "tunnel", "--url", APP_URL], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, creationflags=WINDOWS_NO_CONSOLE)
+            DesktopServerApi.tunnel_process = process
+            DesktopServerApi.tunnel_url = None
+            threading.Thread(target=DesktopServerApi._read_tunnel_output, args=(process,), daemon=True).start()
+            return {"ok": True, "running": True, "url": None, "message": "Cloudflare Tunnel is starting"}
         except OSError:
             return {"ok": False, "message": "Cloudflare Tunnel could not be started"}
 
