@@ -11,7 +11,7 @@
   <body>
     <main>
       <header><div><h1>Панель администратора</h1><p>Управление локальным сервером и подключением устройств.</p></div><a href="/">← К задачам</a></header>
-      <section class="card"><h2>Состояние сервера</h2><p id="status">Проверка…</p><p>Сервер запускается отдельным файлом <code>scripts/start-local-server.ps1</code>. Это ограничение безопасности Windows: веб-страница не может запускать Docker сама.</p></section>
+      <section class="card"><h2>Состояние сервера</h2><p id="status">Проверка…</p><div id="desktop-server-controls" hidden><button id="desktop-start" type="button">Запустить сервер</button><button id="desktop-stop" type="button">Остановить сервер</button><p id="desktop-server-message"></p></div><p id="browser-server-note">В браузере сервер запускается отдельным файлом <code>scripts/start-local-server.ps1</code>. В desktop-приложении эти кнопки доступны прямо здесь.</p></section>
       <section class="card"><h2>Подключение команды</h2><p>Покажи QR-код человеку в той же Wi‑Fi сети. Он откроет адрес сервера, создаст имя пользователя и пароль, после чего ты добавишь его в группу.</p><div class="pairing"><img id="qr" alt="QR-код подключения"><div><strong>Код подключения</strong><code id="pairing-code">—</code><strong>Адрес сервера</strong><code id="server-address">—</code><button id="copy-address" type="button">Скопировать адрес</button></div></div></section>
       <section class="card"><h2>Локальный ИИ-помощник</h2><p id="ai-status">Проверка локального ИИ…</p><p>ИИ по умолчанию не установлен. Когда мы добавим его на компьютер владельца, он будет обслуживать текстовый чат и голосовые команды всей группы, не используя облачные API-ключи.</p><code id="ai-models" hidden></code></section>
       <p id="message"></p>
@@ -20,10 +20,23 @@
       const token = localStorage.getItem('taskManagerAccessToken') || sessionStorage.getItem('taskManagerAccessToken');
       const message = document.querySelector('#message');
       const headers = { Authorization: `Bearer ${token}` };
+      function setDesktopControls() {
+        const api=window.pywebview?.api;
+        if(!api) return;
+        document.querySelector('#desktop-server-controls').hidden=false;
+        document.querySelector('#browser-server-note').hidden=true;
+        const controlMessage=document.querySelector('#desktop-server-message');
+        const refresh=async()=>{const result=await api.server_status(); controlMessage.textContent=result.running?'Сервер запущен.':'Сервер остановлен.';};
+        document.querySelector('#desktop-start').onclick=async()=>{controlMessage.textContent='Запускаю сервер…';const result=await api.start_server();controlMessage.textContent=result.ok?'Сервер запущен.':(result.message||'Не удалось запустить сервер.');};
+        document.querySelector('#desktop-stop').onclick=async()=>{controlMessage.textContent='Останавливаю сервер…';const result=await api.stop_server();controlMessage.textContent=result.ok?'Сервер остановлен.':(result.message||'Не удалось остановить сервер.');};
+        refresh();
+      }
       async function loadAdminPanel() {
         if (!token) { window.location.replace('/'); return; }
         const response = await fetch('/admin/status', { headers });
         if (!response.ok) { message.textContent='Нет доступа к панели администратора.'; message.className='error'; return; }
+        window.addEventListener('pywebviewready', setDesktopControls, { once:true });
+        setDesktopControls();
         const data = await response.json();
         document.querySelector('#status').innerHTML=`<span class="state">● Сервер запущен</span> · ${data.server_url}`;
         document.querySelector('#pairing-code').textContent=data.pairing_code;

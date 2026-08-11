@@ -45,6 +45,39 @@ def docker_executable() -> str | None:
     return None
 
 
+class DesktopServerApi:
+    """Methods exposed only to the local desktop WebView."""
+
+    @staticmethod
+    def server_status() -> dict[str, bool]:
+        return {"running": Launcher.server_is_ready()}
+
+    @staticmethod
+    def start_server() -> dict[str, object]:
+        return DesktopServerApi._run_compose("up")
+
+    @staticmethod
+    def stop_server() -> dict[str, object]:
+        return DesktopServerApi._run_compose("down")
+
+    @staticmethod
+    def _run_compose(command: str) -> dict[str, object]:
+        docker = docker_executable()
+        if docker is None:
+            return {"ok": False, "message": "Docker Desktop is not available"}
+        try:
+            args = ["up", "--build", "--detach"] if command == "up" else ["down"]
+            subprocess.run([docker, "compose", *args], cwd=project_root(), check=True, creationflags=WINDOWS_NO_CONSOLE)
+            if command == "up":
+                for _ in range(20):
+                    if Launcher.server_is_ready():
+                        break
+                    time.sleep(1)
+            return {"ok": True, "running": Launcher.server_is_ready()}
+        except subprocess.CalledProcessError:
+            return {"ok": False, "message": "Docker command failed"}
+
+
 class Launcher(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
@@ -147,7 +180,7 @@ class Launcher(tk.Tk):
             import webview
 
             self.destroy()
-            webview.create_window("Task Manager", APP_URL, width=1180, height=800, min_size=(900, 620), background_color=BG)
+            webview.create_window("Task Manager", APP_URL, width=1180, height=800, min_size=(900, 620), background_color=BG, js_api=DesktopServerApi())
             webview.start()
         except Exception as error:
             messagebox.showerror("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0442\u043a\u0440\u044b\u0442\u044c \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435", str(error))
