@@ -8,20 +8,20 @@
       :root { color-scheme: dark; --bg:#0b1020; --panel:#151d35; --muted:#9aa7c7; --line:#2b3860; --accent:#6ea8fe; --ok:#55d6a1; --danger:#ff7b8a; }
       * { box-sizing:border-box; } body { margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:radial-gradient(circle at 10% 0,#1e315d 0,transparent 35%),var(--bg); color:#eef3ff; min-height:100vh; }
       main { width:min(920px,calc(100% - 32px)); margin:48px auto; } header { display:flex; justify-content:space-between; gap:18px; align-items:start; margin-bottom:24px; }
-      h1 { font-size:clamp(28px,5vw,42px); margin:0 0 8px; } p { color:var(--muted); margin:0; line-height:1.5; } .status { border:1px solid var(--line); border-radius:999px; padding:8px 12px; white-space:nowrap; color:var(--muted); }
+      h1 { font-size:clamp(28px,5vw,42px); margin:0 0 8px; } p { color:var(--muted); margin:0; line-height:1.5; } .header-actions { display:flex; align-items:center; gap:10px; } .language-control { appearance:none; -webkit-appearance:none; border:1px solid var(--line); border-radius:999px; background:#101a33; color:#dce7ff; min-width:66px; padding:8px 30px 8px 12px; font:700 13px/1 Inter,Segoe UI,Arial,sans-serif; cursor:pointer; background-image:linear-gradient(45deg,transparent 50%,#9fb3de 50%),linear-gradient(135deg,#9fb3de 50%,transparent 50%); background-position:calc(100% - 14px) 12px,calc(100% - 9px) 12px; background-size:5px 5px,5px 5px; background-repeat:no-repeat; } .language-control:hover { border-color:var(--accent); } .status { border:1px solid var(--line); border-radius:999px; padding:8px 12px; white-space:nowrap; color:var(--muted); }
       .status.ok { color:var(--ok); border-color:#28775e; } .grid { display:grid; grid-template-columns: 1fr 1.25fr; gap:18px; } .card { background:color-mix(in srgb,var(--panel) 92%,transparent); border:1px solid var(--line); border-radius:16px; padding:20px; box-shadow:0 18px 40px #0004; }
       h2 { margin:0 0 16px; font-size:18px; } label { display:block; margin:12px 0 6px; color:var(--muted); font-size:14px; } input,textarea { width:100%; border:1px solid var(--line); border-radius:9px; background:#0c1327; color:#eef3ff; padding:11px; font:inherit; } textarea { min-height:92px; resize:vertical; }
       button { border:0; border-radius:9px; background:var(--accent); color:#06122b; font-weight:700; padding:11px 14px; cursor:pointer; margin-top:14px; } button.secondary { background:transparent; color:#c9d6fa; border:1px solid var(--line); margin-left:8px; } button:hover { filter:brightness(1.08); }
       .hint { font-size:13px; margin-top:10px; } .message { min-height:24px; margin-top:12px; color:var(--muted); } .message.error { color:var(--danger); } .tasks { display:grid; gap:10px; } .task { border:1px solid var(--line); border-radius:10px; padding:13px; background:#0d152a; } .task h3 { margin:0 0 6px; font-size:16px; } .task small { color:var(--muted); } .empty { color:var(--muted); padding:22px 0; text-align:center; }
       .signed-in { border:1px solid #28775e; border-radius:10px; padding:14px; background:#102b29; } .signed-in strong { color:var(--ok); display:block; margin:5px 0 2px; overflow-wrap:anywhere; } .reminder-toggle { display:flex; align-items:center; gap:9px; margin:16px 0 4px; color:#c9d6fa; cursor:pointer; } .reminder-toggle input { width:auto; accent-color:var(--accent); } .reminder { color:var(--accent); display:block; margin-top:8px; }
-      @media (max-width:720px) { main { margin:26px auto; } header { display:block; } .status { display:inline-block; margin-top:12px; } .grid { grid-template-columns:1fr; } }
+      @media (max-width:720px) { main { margin:26px auto; } header { display:block; } .header-actions { margin-top:12px; } .grid { grid-template-columns:1fr; } }
     </style>
   </head>
   <body>
     <main>
       <header>
         <div><h1>Secure Task Manager</h1><p>Local task dashboard with protected API access.</p></div>
-        <div><select id="language" aria-label="Language"><option value="en">EN</option><option value="ru">RU</option></select><div id="health" class="status">Checking service…</div></div>
+        <div class="header-actions"><select id="language" class="language-control" aria-label="Interface language" title="Interface language"><option value="en">EN</option><option value="ru">RU</option></select><div id="health" class="status">Checking service...</div></div>
       </header>
       <section class="grid">
         <div class="card">
@@ -49,7 +49,9 @@
       </section>
     </main>
     <script>
+      if (false) {
       const languageSelect=document.querySelector('#language'); const translations={ru:{'Secure Task Manager':'Менеджер задач','Local task dashboard with protected API access.':'Локальный менеджер задач','Account':'Аккаунт','Create account':'Создать аккаунт','Sign in':'Войти','Sign out':'Выйти','Create task':'Создать задачу','Title':'Название','Description':'Описание','Set a reminder':'Поставить напоминание','Remind me at':'Напомнить в','Enable browser notifications':'Включить уведомления','Tasks':'Задачи','Personal task':'Личная задача','Group':'Группа','Team groups':'Командные группы','Create group':'Создать группу','New group name':'Название новой группы','Add member':'Добавить участника','Member':'Участник','Manager':'Менеджер','Admin':'Администратор'}}; const reverse=Object.fromEntries(Object.entries(translations.ru).map(([en,ru])=>[ru,en])); function applyLanguage(lang){document.documentElement.lang=lang;const map=lang==='ru'?translations.ru:reverse;document.querySelectorAll('h1,h2,label,button,option,p,small').forEach(node=>{const text=node.textContent.trim();if(map[text])node.textContent=map[text];});localStorage.setItem('taskManagerLanguage',lang);} languageSelect.value=localStorage.getItem('taskManagerLanguage')||'en';languageSelect.onchange=()=>applyLanguage(languageSelect.value);applyLanguage(languageSelect.value);
+      }
       const emailInput = document.querySelector('#email'); const passwordInput = document.querySelector('#password'); const message = document.querySelector('#message'); const tasks = document.querySelector('#tasks'); const reminderEnabled = document.querySelector('#reminder-enabled'); const reminderOptions = document.querySelector('#reminder-options'); const reminderAt = document.querySelector('#reminder-at'); const notifiedReminders = new Set(JSON.parse(localStorage.getItem('notifiedReminders') || '[]'));
       let accessToken = sessionStorage.getItem('taskManagerAccessToken') || '';
       const headers = () => ({ 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' });
@@ -80,6 +82,38 @@
       const originalSignOut=document.querySelector('#forget-token').onclick; document.querySelector('#forget-token').onclick=()=>{originalSignOut(); groupPanel.hidden=true;};
       document.querySelector('#task-form').onsubmit=async(event)=>{event.preventDefault(); try{if(reminderEnabled.checked&&!reminderAt.value) throw new Error('Choose a reminder date and time.'); const groupId=groupSelect.value; const response=await fetch('/tasks',{method:'POST',headers:headers(),body:JSON.stringify({title:document.querySelector('#title').value,description:document.querySelector('#description').value||null,reminder_at:reminderEnabled.checked?reminderAt.value:null,group_id:groupId?Number(groupId):null,assignee_email:groupId?assigneeInput.value:null})}); const body=await response.json(); if(!response.ok) throw new Error(body.detail||'Unable to create task.'); event.target.reset(); assigneeInput.hidden=true; reminderOptions.hidden=true; await loadTasks(); note('Task created.');}catch(error){note(error.message,true);}};
       if(accessToken) refreshGroups();
+    </script>
+    <script>
+      (() => {
+        const control = document.querySelector('#language');
+        const russian = {
+          'Secure Task Manager': '\u041c\u0435\u043d\u0435\u0434\u0436\u0435\u0440 \u0437\u0430\u0434\u0430\u0447',
+          'Local task dashboard with protected API access.': '\u041b\u043e\u043a\u0430\u043b\u044c\u043d\u044b\u0439 \u043c\u0435\u043d\u0435\u0434\u0436\u0435\u0440 \u0437\u0430\u0434\u0430\u0447 \u0441 \u0437\u0430\u0449\u0438\u0449\u0451\u043d\u043d\u044b\u043c \u0434\u043e\u0441\u0442\u0443\u043f\u043e\u043c \u043a API.',
+          'Checking service...': '\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430 \u0441\u0435\u0440\u0432\u0438\u0441\u0430...',
+          'Account': '\u0410\u043a\u043a\u0430\u0443\u043d\u0442', 'Email': '\u042d\u043b. \u043f\u043e\u0447\u0442\u0430', 'Password': '\u041f\u0430\u0440\u043e\u043b\u044c',
+          'Create account': '\u0421\u043e\u0437\u0434\u0430\u0442\u044c \u0430\u043a\u043a\u0430\u0443\u043d\u0442', 'Sign in': '\u0412\u043e\u0439\u0442\u0438', 'Sign out': '\u0412\u044b\u0439\u0442\u0438',
+          'Create an account once, then sign in. Your access token stays only in this browser tab.': '\u0421\u043e\u0437\u0434\u0430\u0439\u0442\u0435 \u0430\u043a\u043a\u0430\u0443\u043d\u0442 \u043e\u0434\u0438\u043d \u0440\u0430\u0437, \u0437\u0430\u0442\u0435\u043c \u0432\u043e\u0439\u0434\u0438\u0442\u0435. \u0422\u043e\u043a\u0435\u043d \u0445\u0440\u0430\u043d\u0438\u0442\u0441\u044f \u0442\u043e\u043b\u044c\u043a\u043e \u0432 \u044d\u0442\u043e\u0439 \u0432\u043a\u043b\u0430\u0434\u043a\u0435.',
+          'Team groups': '\u0413\u0440\u0443\u043f\u043f\u044b \u043a\u043e\u043c\u0430\u043d\u0434\u044b', 'Create group': '\u0421\u043e\u0437\u0434\u0430\u0442\u044c \u0433\u0440\u0443\u043f\u043f\u0443', 'Add member': '\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0443\u0447\u0430\u0441\u0442\u043d\u0438\u043a\u0430',
+          'Member': '\u0423\u0447\u0430\u0441\u0442\u043d\u0438\u043a', 'Manager': '\u041c\u0435\u043d\u0435\u0434\u0436\u0435\u0440', 'Admin': '\u0410\u0434\u043c\u0438\u043d\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440',
+          'Create task': '\u0421\u043e\u0437\u0434\u0430\u0442\u044c \u0437\u0430\u0434\u0430\u0447\u0443', 'Title': '\u041d\u0430\u0437\u0432\u0430\u043d\u0438\u0435', 'Description': '\u041e\u043f\u0438\u0441\u0430\u043d\u0438\u0435', 'Group': '\u0413\u0440\u0443\u043f\u043f\u0430', 'Personal task': '\u041b\u0438\u0447\u043d\u0430\u044f \u0437\u0430\u0434\u0430\u0447\u0430',
+          'Set a reminder': '\u041f\u043e\u0441\u0442\u0430\u0432\u0438\u0442\u044c \u043d\u0430\u043f\u043e\u043c\u0438\u043d\u0430\u043d\u0438\u0435', 'Remind me at': '\u041d\u0430\u043f\u043e\u043c\u043d\u0438\u0442\u044c \u0432', 'Enable browser notifications': '\u0412\u043a\u043b\u044e\u0447\u0438\u0442\u044c \u0443\u0432\u0435\u0434\u043e\u043c\u043b\u0435\u043d\u0438\u044f \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0430', 'Tasks': '\u0417\u0430\u0434\u0430\u0447\u0438',
+          'Interface language': '\u042f\u0437\u044b\u043a \u0438\u043d\u0442\u0435\u0440\u0444\u0435\u0439\u0441\u0430', 'Service online': '\u0421\u0435\u0440\u0432\u0438\u0441 \u0432 \u0441\u0435\u0442\u0438', 'Service unavailable': '\u0421\u0435\u0440\u0432\u0438\u0441 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d', 'No tasks yet. Create the first one.': '\u0417\u0430\u0434\u0430\u0447 \u043f\u043e\u043a\u0430 \u043d\u0435\u0442. \u0421\u043e\u0437\u0434\u0430\u0439\u0442\u0435 \u043f\u0435\u0440\u0432\u0443\u044e.', 'Sign in to load tasks.': '\u0412\u043e\u0439\u0434\u0438\u0442\u0435, \u0447\u0442\u043e\u0431\u044b \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u0437\u0430\u0434\u0430\u0447\u0438.'
+        };
+        const english = Object.fromEntries(Object.entries(russian).map(([key, value]) => [value, key]));
+        const translate = () => {
+          const map = (localStorage.getItem('taskManagerLanguage') || 'en') === 'ru' ? russian : english;
+          document.documentElement.lang = control.value;
+          document.title = map[document.title] || document.title;
+          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+          const texts = []; while (walker.nextNode()) texts.push(walker.currentNode);
+          texts.forEach(node => { const value = node.nodeValue.trim(); if (map[value]) node.nodeValue = node.nodeValue.replace(value, map[value]); });
+          document.querySelectorAll('[placeholder],[title],[aria-label]').forEach(element => ['placeholder','title','aria-label'].forEach(attribute => { const value=element.getAttribute(attribute); if (map[value]) element.setAttribute(attribute,map[value]); }));
+        };
+        control.value = localStorage.getItem('taskManagerLanguage') || 'en';
+        control.addEventListener('change', () => { localStorage.setItem('taskManagerLanguage', control.value); window.location.reload(); });
+        translate();
+        new MutationObserver(translate).observe(document.body, { childList:true, subtree:true, characterData:true });
+      })();
     </script>
   </body>
 </html>
