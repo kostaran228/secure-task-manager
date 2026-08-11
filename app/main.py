@@ -22,6 +22,7 @@ engine = create_engine(DATABASE_URL, connect_args=connect_args)
 password_hash = PasswordHash.recommended()
 TOKEN_ALGORITHM = "HS256"
 TOKEN_LIFETIME_HOURS = 12
+REMEMBERED_TOKEN_LIFETIME_DAYS = 30
 SERVER_URL = os.getenv("SERVER_URL", "http://localhost:8000").rstrip("/")
 PAIRING_CODE = secrets.token_urlsafe(6)
 
@@ -64,7 +65,9 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
+    # email is retained only to preserve data from early local versions.
+    email: Mapped[str | None] = mapped_column(String(320), unique=True, index=True, nullable=True)
+    username: Mapped[str | None] = mapped_column(String(32), unique=True, index=True, nullable=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -74,7 +77,7 @@ class TaskCreate(BaseModel):
     description: str | None = Field(default=None, max_length=1000)
     reminder_at: datetime | None = None
     group_id: int | None = None
-    assignee_email: str | None = Field(default=None, max_length=320)
+    assignee_username: str | None = Field(default=None, max_length=32)
 
 
 class TaskRead(TaskCreate):
@@ -84,8 +87,9 @@ class TaskRead(TaskCreate):
 
 
 class Credentials(BaseModel):
-    email: str = Field(min_length=3, max_length=320)
+    username: str = Field(min_length=3, max_length=32)
     password: str = Field(min_length=8, max_length=128)
+    remember_me: bool = False
 
 
 class AccessToken(BaseModel):
@@ -94,7 +98,7 @@ class AccessToken(BaseModel):
 
 
 class UserProfile(BaseModel):
-    email: str
+    username: str
 
 
 class PairingInfo(BaseModel):
@@ -107,7 +111,7 @@ class GroupCreate(BaseModel):
 
 
 class MemberAdd(BaseModel):
-    email: str
+    username: str
     role: str
 
 
@@ -141,12 +145,15 @@ def create_tables() -> None:
             connection.exec_driver_sql("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS reminder_at TIMESTAMP")
             connection.exec_driver_sql("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS group_id INTEGER")
             connection.exec_driver_sql("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assignee_id INTEGER")
+            connection.exec_driver_sql("ALTER TABLE users ADD COLUMN IF NOT EXISTS username VARCHAR(32)")
+            connection.exec_driver_sql("UPDATE users SET username = CONCAT('user-', id) WHERE username IS NULL")
+            connection.exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_username ON users (username)")
 
 
-def normalized_email(email: str) -> str:
-    normalized = email.strip().lower()
-    if normalized.count("@") != 1 or normalized.startswith("@") or normalized.endswith("@"):
-        raise HTTPException(status_code=422, detail="Enter a valid email address")
+def normalized_username(username: str) -> str:
+    normalized = username.strip().casefold()
+    if len(normalized) < 3 or len(normalized) > 32 or not all(character.isalnum() or character in "_.-" for character in normalized):
+        raise HTTPException(status_code=422, detail="Username must be 3-32 characters and use letters, numbers, dot, dash, or underscore")
     return normalized
 
 
@@ -157,9 +164,10 @@ def jwt_secret() -> str:
     return secret
 
 
-def create_access_token(user: User) -> str:
-    expires_at = datetime.now(timezone.utc) + timedelta(hours=TOKEN_LIFETIME_HOURS)
-    return encode({"sub": str(user.id), "email": user.email, "exp": expires_at}, jwt_secret(), algorithm=TOKEN_ALGORITHM)
+def create_access_token(user: User, remember_me: bool = False) -> str:
+    lifetime = timedelta(days=REMEMBERED_TOKEN_LIFETIME_DAYS) if remember_me else timedelta(hours=TOKEN_LIFETIME_HOURS)
+    expires_at = datetime.now(timezone.utc) + lifetime
+    return encode({"sub": str(user.id), "username": user.username, "exp": expires_at}, jwt_secret(), algorithm=TOKEN_ALGORITHM)
 
 
 def current_user(authorization: str | None = Header(default=None)) -> User:
@@ -209,30 +217,32 @@ def pairing_qr() -> Response:
 
 @app.post("/auth/register", response_model=AccessToken, status_code=status.HTTP_201_CREATED)
 def register(payload: Credentials) -> AccessToken:
-    email = normalized_email(payload.email)
+    username = normalized_username(payload.username)
     with Session(engine) as session:
-        if session.scalar(select(User).where(User.email == email)) is not None:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email is already registered")
-        user = User(email=email, password_hash=password_hash.hash(payload.password))
+        if session.scalar(select(User).where(User.username == username)) is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username is already taken")
+        # The legacy email column remains for database compatibility; it never
+        # receives a real address and is not used for authentication.
+        user = User(username=username, email=f"{username}@local.invalid", password_hash=password_hash.hash(payload.password))
         session.add(user)
         session.commit()
         session.refresh(user)
-        return AccessToken(access_token=create_access_token(user))
+        return AccessToken(access_token=create_access_token(user, payload.remember_me))
 
 
 @app.post("/auth/login", response_model=AccessToken)
 def login(payload: Credentials) -> AccessToken:
-    email = normalized_email(payload.email)
+    username = normalized_username(payload.username)
     with Session(engine) as session:
-        user = session.scalar(select(User).where(User.email == email))
+        user = session.scalar(select(User).where(User.username == username))
         if user is None or not password_hash.verify(payload.password, user.password_hash):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect email or password")
-        return AccessToken(access_token=create_access_token(user))
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or password")
+        return AccessToken(access_token=create_access_token(user, payload.remember_me))
 
 
 @app.get("/auth/me", response_model=UserProfile)
 def me(user: User = Depends(current_user)) -> UserProfile:
-    return UserProfile(email=user.email)
+    return UserProfile(username=user.username or f"user-{user.id}")
 
 
 @app.post("/groups", response_model=GroupRead, status_code=status.HTTP_201_CREATED)
@@ -261,9 +271,9 @@ def add_member(group_id: int, payload: MemberAdd, user: User = Depends(current_u
         actor = membership_for(session, group_id, user.id)
         if actor.role != "admin":
             raise HTTPException(status_code=403, detail="Only an admin can manage group roles")
-        target = session.scalar(select(User).where(User.email == normalized_email(payload.email)))
+        target = session.scalar(select(User).where(User.username == normalized_username(payload.username)))
         if target is None:
-            raise HTTPException(status_code=404, detail="This email has not registered yet")
+            raise HTTPException(status_code=404, detail="This username has not registered yet")
         existing = session.scalar(select(Membership).where(Membership.group_id == group_id, Membership.user_id == target.id))
         if existing:
             existing.role = payload.role
@@ -281,16 +291,16 @@ def create_task(payload: TaskCreate, user: User = Depends(current_user)) -> Task
             actor = membership_for(session, payload.group_id, user.id)
             if actor.role == "member":
                 raise HTTPException(status_code=403, detail="Members cannot assign group tasks")
-            if payload.assignee_email is None:
+            if payload.assignee_username is None:
                 raise HTTPException(status_code=422, detail="Choose a group member to assign this task")
-            target = session.scalar(select(User).where(User.email == normalized_email(payload.assignee_email)))
+            target = session.scalar(select(User).where(User.username == normalized_username(payload.assignee_username)))
             target_membership = membership_for(session, payload.group_id, target.id) if target else None
             if target_membership is None:
                 raise HTTPException(status_code=404, detail="Assignee is not in this group")
             if actor.role == "manager" and ROLE_RANK[target_membership.role] >= ROLE_RANK[actor.role]:
                 raise HTTPException(status_code=403, detail="Managers can assign tasks only to members")
             assignee_id = target.id
-        task_data = payload.model_dump(exclude={"assignee_email"})
+        task_data = payload.model_dump(exclude={"assignee_username"})
         task = Task(**task_data, owner_id=user.id, assignee_id=assignee_id)
         session.add(task)
         session.commit()
