@@ -58,11 +58,13 @@ def test_registration_and_login_issue_access_tokens() -> None:
 
     registered = client.post("/auth/register", json={"email": email, "password": "test-password"})
     logged_in = client.post("/auth/login", json={"email": email, "password": "test-password"})
+    profile = client.get("/auth/me", headers={"Authorization": f"Bearer {logged_in.json()['access_token']}"})
 
     assert registered.status_code == 201
     assert logged_in.status_code == 200
     assert registered.json()["access_token"]
     assert logged_in.json()["token_type"] == "bearer"
+    assert profile.json() == {"email": email}
 
 
 def test_task_routes_require_sign_in() -> None:

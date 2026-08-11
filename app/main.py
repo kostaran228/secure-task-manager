@@ -63,6 +63,10 @@ class AccessToken(BaseModel):
     token_type: str = "bearer"
 
 
+class UserProfile(BaseModel):
+    email: str
+
+
 is_production = os.getenv("APP_ENV") == "production"
 app = FastAPI(
     title="Secure Task Manager",
@@ -147,6 +151,11 @@ def login(payload: Credentials) -> AccessToken:
         if user is None or not password_hash.verify(payload.password, user.password_hash):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect email or password")
         return AccessToken(access_token=create_access_token(user))
+
+
+@app.get("/auth/me", response_model=UserProfile)
+def me(user: User = Depends(current_user)) -> UserProfile:
+    return UserProfile(email=user.email)
 
 
 @app.post("/tasks", response_model=TaskRead, status_code=status.HTTP_201_CREATED)

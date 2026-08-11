@@ -13,6 +13,7 @@
       h2 { margin:0 0 16px; font-size:18px; } label { display:block; margin:12px 0 6px; color:var(--muted); font-size:14px; } input,textarea { width:100%; border:1px solid var(--line); border-radius:9px; background:#0c1327; color:#eef3ff; padding:11px; font:inherit; } textarea { min-height:92px; resize:vertical; }
       button { border:0; border-radius:9px; background:var(--accent); color:#06122b; font-weight:700; padding:11px 14px; cursor:pointer; margin-top:14px; } button.secondary { background:transparent; color:#c9d6fa; border:1px solid var(--line); margin-left:8px; } button:hover { filter:brightness(1.08); }
       .hint { font-size:13px; margin-top:10px; } .message { min-height:24px; margin-top:12px; color:var(--muted); } .message.error { color:var(--danger); } .tasks { display:grid; gap:10px; } .task { border:1px solid var(--line); border-radius:10px; padding:13px; background:#0d152a; } .task h3 { margin:0 0 6px; font-size:16px; } .task small { color:var(--muted); } .empty { color:var(--muted); padding:22px 0; text-align:center; }
+      .signed-in { border:1px solid #28775e; border-radius:10px; padding:14px; background:#102b29; } .signed-in strong { color:var(--ok); display:block; margin:5px 0 2px; overflow-wrap:anywhere; }
       @media (max-width:720px) { main { margin:26px auto; } header { display:block; } .status { display:inline-block; margin-top:12px; } .grid { grid-template-columns:1fr; } }
     </style>
   </head>
@@ -24,11 +25,13 @@
       </header>
       <section class="grid">
         <div class="card">
-          <h2>Account</h2>
-          <label for="email">Email</label><input id="email" type="email" autocomplete="email" placeholder="you@example.com">
-          <label for="password">Password</label><input id="password" type="password" minlength="8" autocomplete="current-password" placeholder="At least 8 characters">
-          <p class="hint">Create an account once, then sign in. Your access token stays only in this browser tab.</p>
-          <button id="register" type="button">Create account</button><button id="login" class="secondary" type="button">Sign in</button><button id="forget-token" class="secondary" type="button">Sign out</button>
+          <div id="account-form"><h2>Account</h2>
+            <label for="email">Email</label><input id="email" type="email" autocomplete="email" placeholder="you@example.com">
+            <label for="password">Password</label><input id="password" type="password" minlength="8" autocomplete="current-password" placeholder="At least 8 characters">
+            <p class="hint">Create an account once, then sign in. Your access token stays only in this browser tab.</p>
+            <button id="register" type="button">Create account</button><button id="login" class="secondary" type="button">Sign in</button>
+          </div>
+          <div id="signed-in" class="signed-in" hidden><p>✓ You are signed in as</p><strong id="current-email"></strong><button id="forget-token" class="secondary" type="button">Sign out</button></div>
           <div id="message" class="message"></div>
           <h2 style="margin-top:28px">Create task</h2>
           <form id="task-form">
@@ -47,13 +50,16 @@
       const note = (text, error=false) => { message.textContent=text; message.className='message'+(error?' error':''); };
       async function loadTasks() { if (!accessToken) return; const response = await fetch('/tasks',{headers:headers()}); if (!response.ok) throw new Error(response.status===401?'Sign in to load your tasks.':'Unable to load tasks.'); const items=await response.json(); tasks.innerHTML=items.length?items.map(task=>`<article class="task"><h3>${escapeHtml(task.title)}</h3>${task.description?`<p>${escapeHtml(task.description)}</p>`:''}<small>${new Date(task.created_at+'Z').toLocaleString()}</small></article>`).join(''):'<div class="empty">No tasks yet. Create the first one.</div>'; }
       function escapeHtml(value) { const node=document.createElement('span'); node.textContent=value; return node.innerHTML; }
-      async function authenticate(path) { const response = await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:emailInput.value,password:passwordInput.value})}); const body=await response.json(); if (!response.ok) throw new Error(body.detail||'Unable to sign in.'); accessToken=body.access_token; sessionStorage.setItem('taskManagerAccessToken',accessToken); passwordInput.value=''; await loadTasks(); note(path.endsWith('register')?'Account created.':'Signed in.'); }
+      function showSignedIn(email) { document.querySelector('#account-form').hidden=true; document.querySelector('#signed-in').hidden=false; document.querySelector('#current-email').textContent=email; }
+      function showSignedOut() { document.querySelector('#account-form').hidden=false; document.querySelector('#signed-in').hidden=true; }
+      async function refreshIdentity() { const response=await fetch('/auth/me',{headers:headers()}); if (!response.ok) throw new Error('Your session has expired. Sign in again.'); const profile=await response.json(); showSignedIn(profile.email); }
+      async function authenticate(path) { const response = await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:emailInput.value,password:passwordInput.value})}); const body=await response.json(); if (!response.ok) throw new Error(body.detail||'Unable to sign in.'); accessToken=body.access_token; sessionStorage.setItem('taskManagerAccessToken',accessToken); passwordInput.value=''; await refreshIdentity(); await loadTasks(); note(path.endsWith('register')?'Account created and signed in.':'Signed in.'); }
       document.querySelector('#register').onclick=async()=>{ try { await authenticate('/auth/register'); } catch(error) { note(error.message,true); } };
       document.querySelector('#login').onclick=async()=>{ try { await authenticate('/auth/login'); } catch(error) { note(error.message,true); } };
-      document.querySelector('#forget-token').onclick=()=>{ sessionStorage.removeItem('taskManagerAccessToken'); accessToken=''; tasks.innerHTML='<div class="empty">Sign in to load tasks.</div>'; note('Signed out.'); };
+      document.querySelector('#forget-token').onclick=()=>{ sessionStorage.removeItem('taskManagerAccessToken'); accessToken=''; showSignedOut(); tasks.innerHTML='<div class="empty">Sign in to load tasks.</div>'; note('Signed out.'); emailInput.focus(); };
       document.querySelector('#task-form').onsubmit=async(event)=>{ event.preventDefault(); try { const response=await fetch('/tasks',{method:'POST',headers:headers(),body:JSON.stringify({title:document.querySelector('#title').value,description:document.querySelector('#description').value||null})}); if (!response.ok) throw new Error(response.status===401?'Sign in before creating tasks.':'Unable to create task.'); event.target.reset(); await loadTasks(); note('Task created.'); } catch(error) { note(error.message,true); } };
       fetch('/health').then(response=>{ if(!response.ok) throw new Error(); document.querySelector('#health').textContent='● Service online'; document.querySelector('#health').classList.add('ok'); }).catch(()=>{ document.querySelector('#health').textContent='● Service unavailable'; });
-      if (accessToken) loadTasks().catch(error=>note(error.message,true));
+      if (accessToken) refreshIdentity().then(loadTasks).catch(error=>{ sessionStorage.removeItem('taskManagerAccessToken'); accessToken=''; showSignedOut(); note(error.message,true); });
     </script>
   </body>
 </html>
