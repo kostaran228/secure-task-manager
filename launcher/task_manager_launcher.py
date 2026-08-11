@@ -1,4 +1,4 @@
-"""Windows desktop launcher for the local Task Manager server."""
+"""A small Windows GUI for starting the local Task Manager server."""
 
 from __future__ import annotations
 
@@ -16,6 +16,13 @@ from tkinter import messagebox
 
 APP_URL = "http://localhost:8000"
 WINDOWS_NO_CONSOLE = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+BG = "#0a1020"
+PANEL = "#151e35"
+PANEL_ALT = "#10182b"
+TEXT = "#edf3ff"
+MUTED = "#96a6c9"
+ACCENT = "#78aaff"
+SUCCESS = "#58d6a1"
 
 
 def project_root() -> Path:
@@ -32,8 +39,8 @@ def docker_executable() -> str | None:
     for candidate in candidates:
         if candidate.exists():
             return str(candidate)
-    for directory in os.environ.get("PATH", "").split(os.pathsep):
-        candidate = Path(directory) / "docker.exe"
+    for folder in os.environ.get("PATH", "").split(os.pathsep):
+        candidate = Path(folder) / "docker.exe"
         if candidate.exists():
             return str(candidate)
     return None
@@ -42,32 +49,47 @@ def docker_executable() -> str | None:
 class Launcher(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("Task Manager — Local Server")
-        self.geometry("470x280")
-        self.resizable(False, False)
-        self.configure(bg="#0b1020")
+        self.title("Task Manager Launcher")
+        self.geometry("620x430")
+        self.minsize(620, 430)
+        self.configure(bg=BG)
 
-        frame = tk.Frame(self, bg="#151d35", padx=24, pady=22)
-        frame.pack(fill="both", expand=True, padx=16, pady=16)
-        tk.Label(frame, text="Локальный сервер Task Manager", font=("Segoe UI", 17, "bold"), fg="#eef3ff", bg="#151d35").pack(anchor="w")
-        tk.Label(frame, text="Запускайте сервер для своей команды без консоли.", font=("Segoe UI", 10), fg="#9aa7c7", bg="#151d35").pack(anchor="w", pady=(7, 14))
-        self.status = tk.Label(frame, text="Проверка состояния…", font=("Segoe UI", 11, "bold"), fg="#9aa7c7", bg="#151d35")
-        self.status.pack(anchor="w", pady=(0, 16))
+        root = tk.Frame(self, bg=BG, padx=28, pady=25)
+        root.pack(fill="both", expand=True)
+        tk.Label(root, text="TASK MANAGER", font=("Segoe UI", 10, "bold"), fg=ACCENT, bg=BG).pack(anchor="w")
+        tk.Label(root, text="\u041b\u043e\u043a\u0430\u043b\u044c\u043d\u044b\u0439 \u0441\u0435\u0440\u0432\u0435\u0440", font=("Segoe UI", 25, "bold"), fg=TEXT, bg=BG).pack(anchor="w", pady=(2, 3))
+        tk.Label(root, text="\u0423\u043f\u0440\u0430\u0432\u043b\u044f\u0439\u0442\u0435 \u0441\u0435\u0440\u0432\u0435\u0440\u043e\u043c \u0434\u043b\u044f \u0441\u0432\u043e\u0435\u0439 \u043a\u043e\u043c\u0430\u043d\u0434\u044b \u0431\u0435\u0437 \u043a\u043e\u043d\u0441\u043e\u043b\u0438.", font=("Segoe UI", 10), fg=MUTED, bg=BG).pack(anchor="w")
 
-        actions = tk.Frame(frame, bg="#151d35")
-        actions.pack(anchor="w")
-        self.start_button = tk.Button(actions, text="Запустить сервер", command=self.start_server, bg="#6ea8fe", fg="#06122b", activebackground="#8ab9ff", font=("Segoe UI", 10, "bold"), relief="flat", padx=14, pady=8)
-        self.start_button.pack(side="left")
-        self.stop_button = tk.Button(actions, text="Остановить", command=self.stop_server, bg="#263554", fg="#eef3ff", activebackground="#3c517d", font=("Segoe UI", 10, "bold"), relief="flat", padx=14, pady=8)
-        self.stop_button.pack(side="left", padx=8)
-        self.open_button = tk.Button(actions, text="Открыть приложение", command=lambda: webbrowser.open(APP_URL), bg="#263554", fg="#eef3ff", activebackground="#3c517d", font=("Segoe UI", 10, "bold"), relief="flat", padx=14, pady=8)
-        self.open_button.pack(side="left")
+        status_card = tk.Frame(root, bg=PANEL, padx=18, pady=16)
+        status_card.pack(fill="x", pady=(22, 14))
+        tk.Label(status_card, text="\u0421\u041e\u0421\u0422\u041e\u042f\u041d\u0418\u0415", font=("Segoe UI", 9, "bold"), fg=MUTED, bg=PANEL).pack(anchor="w")
+        self.status = tk.Label(status_card, text="\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430 \u0441\u043e\u0441\u0442\u043e\u044f\u043d\u0438\u044f...", font=("Segoe UI", 15, "bold"), fg=MUTED, bg=PANEL)
+        self.status.pack(anchor="w", pady=(5, 0))
+        self.status_detail = tk.Label(status_card, text=APP_URL, font=("Segoe UI", 9), fg=MUTED, bg=PANEL)
+        self.status_detail.pack(anchor="w", pady=(4, 0))
 
-        tk.Label(frame, text="После запуска открой «Мой сервер» в приложении для QR-кода и настроек.", wraplength=400, justify="left", font=("Segoe UI", 9), fg="#9aa7c7", bg="#151d35").pack(anchor="w", pady=(20, 0))
+        actions = tk.Frame(root, bg=BG)
+        actions.pack(fill="x", pady=(2, 16))
+        self.start_button = self.make_button(actions, "\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u044c \u0441\u0435\u0440\u0432\u0435\u0440", self.start_server, ACCENT, "#07142d")
+        self.start_button.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        self.open_button = self.make_button(actions, "\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435", self.open_application, "#253756", TEXT)
+        self.open_button.pack(side="left", fill="x", expand=True, padx=6)
+        self.stop_button = self.make_button(actions, "\u041e\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u044c", self.stop_server, "#253756", TEXT)
+        self.stop_button.pack(side="left", fill="x", expand=True, padx=(6, 0))
+
+        hint = tk.Frame(root, bg=PANEL_ALT, padx=16, pady=14)
+        hint.pack(fill="x")
+        tk.Label(hint, text="\u0427\u0442\u043e \u0434\u0430\u043b\u044c\u0448\u0435", font=("Segoe UI", 10, "bold"), fg=TEXT, bg=PANEL_ALT).pack(anchor="w")
+        tk.Label(hint, text="\u041f\u043e\u0441\u043b\u0435 \u0437\u0430\u043f\u0443\u0441\u043a\u0430 \u043e\u0442\u043a\u0440\u043e\u0439\u0442\u0435 \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435, \u0437\u0430\u0442\u0435\u043c \u0432\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u00ab\u041c\u043e\u0439 \u0441\u0435\u0440\u0432\u0435\u0440\u00bb \u0434\u043b\u044f QR-\u043a\u043e\u0434\u0430 \u0438 \u043d\u0430\u0441\u0442\u0440\u043e\u0435\u043a.", wraplength=540, justify="left", font=("Segoe UI", 10), fg=MUTED, bg=PANEL_ALT).pack(anchor="w", pady=(5, 0))
         self.refresh_status()
 
-    def set_status(self, text: str, color: str = "#9aa7c7") -> None:
+    @staticmethod
+    def make_button(parent: tk.Widget, text: str, command: object, background: str, foreground: str) -> tk.Button:
+        return tk.Button(parent, text=text, command=command, bg=background, fg=foreground, activebackground=background, activeforeground=foreground, disabledforeground="#71809e", font=("Segoe UI", 10, "bold"), relief="flat", bd=0, cursor="hand2", pady=12)
+
+    def set_status(self, text: str, color: str, detail: str = APP_URL) -> None:
         self.status.configure(text=text, fg=color)
+        self.status_detail.configure(text=detail)
 
     @staticmethod
     def server_is_ready() -> bool:
@@ -79,19 +101,23 @@ class Launcher(tk.Tk):
 
     def refresh_status(self) -> None:
         ready = self.server_is_ready()
-        self.set_status("● Сервер запущен" if ready else "○ Сервер остановлен", "#55d6a1" if ready else "#9aa7c7")
+        if ready:
+            self.set_status("● \u0421\u0435\u0440\u0432\u0435\u0440 \u0437\u0430\u043f\u0443\u0449\u0435\u043d", SUCCESS, "\u0413\u043e\u0442\u043e\u0432 \u043a \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u044e \u043f\u043e \u0430\u0434\u0440\u0435\u0441\u0443 " + APP_URL)
+        else:
+            self.set_status("○ \u0421\u0435\u0440\u0432\u0435\u0440 \u043e\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d", MUTED, "\u041d\u0430\u0436\u043c\u0438\u0442\u0435 \u00ab\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u044c \u0441\u0435\u0440\u0432\u0435\u0440\u00bb, \u0447\u0442\u043e\u0431\u044b \u043e\u043d \u0441\u0442\u0430\u043b \u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d.")
         self.start_button.configure(state="disabled" if ready else "normal")
         self.stop_button.configure(state="normal" if ready else "disabled")
-        self.after(3000, self.refresh_status)
+        self.open_button.configure(state="normal" if ready else "disabled")
+        self.after(2500, self.refresh_status)
 
     def run_compose(self, command: str) -> None:
         docker = docker_executable()
         if docker is None:
-            self.after(0, lambda: messagebox.showerror("Docker не найден", "Установите и запустите Docker Desktop, затем повторите."))
+            self.after(0, lambda: messagebox.showerror("Docker \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d", "\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0435 Docker Desktop, \u0437\u0430\u0442\u0435\u043c \u043f\u043e\u0432\u0442\u043e\u0440\u0438\u0442\u0435."))
             return
         try:
-            compose_args = ["up", "--build", "--detach"] if command == "up" else ["down"]
-            subprocess.run([docker, "compose", *compose_args], cwd=project_root(), check=True, creationflags=WINDOWS_NO_CONSOLE)
+            args = ["up", "--build", "--detach"] if command == "up" else ["down"]
+            subprocess.run([docker, "compose", *args], cwd=project_root(), check=True, creationflags=WINDOWS_NO_CONSOLE)
             if command == "up":
                 for _ in range(20):
                     time.sleep(1)
@@ -99,15 +125,25 @@ class Launcher(tk.Tk):
                         break
             self.after(0, self.refresh_status)
         except subprocess.CalledProcessError:
-            self.after(0, lambda: messagebox.showerror("Не удалось выполнить команду", "Проверьте, что Docker Desktop запущен."))
+            self.after(0, lambda: messagebox.showerror("\u041e\u0448\u0438\u0431\u043a\u0430 \u0437\u0430\u043f\u0443\u0441\u043a\u0430", "\u041f\u0440\u043e\u0432\u0435\u0440\u044c\u0442\u0435, \u0447\u0442\u043e Docker Desktop \u0437\u0430\u043f\u0443\u0449\u0435\u043d."))
 
     def start_server(self) -> None:
-        self.set_status("Запускаю сервер…", "#6ea8fe")
+        self.set_status("\u0417\u0430\u043f\u0443\u0441\u043a\u0430\u044e \u0441\u0435\u0440\u0432\u0435\u0440...", ACCENT)
         threading.Thread(target=self.run_compose, args=("up",), daemon=True).start()
 
     def stop_server(self) -> None:
-        self.set_status("Останавливаю сервер…", "#9aa7c7")
+        self.set_status("\u041e\u0441\u0442\u0430\u043d\u0430\u0432\u043b\u0438\u0432\u0430\u044e \u0441\u0435\u0440\u0432\u0435\u0440...", MUTED)
         threading.Thread(target=self.run_compose, args=("down",), daemon=True).start()
+
+    def open_application(self) -> None:
+        if not self.server_is_ready():
+            messagebox.showinfo("\u0421\u0435\u0440\u0432\u0435\u0440 \u043e\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d", "\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u0437\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0435 \u0441\u0435\u0440\u0432\u0435\u0440.")
+            return
+        try:
+            os.startfile(APP_URL)  # type: ignore[attr-defined]
+            self.set_status("● \u0421\u0435\u0440\u0432\u0435\u0440 \u0437\u0430\u043f\u0443\u0449\u0435\u043d", SUCCESS, "\u041e\u0442\u043a\u0440\u044b\u0432\u0430\u044e \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435 \u0432 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0435...")
+        except OSError:
+            webbrowser.open_new_tab(APP_URL)
 
 
 if __name__ == "__main__":
