@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Secure Task Manager</title>
+    <style>
+      :root { color-scheme: dark; --bg:#0b1020; --panel:#151d35; --muted:#9aa7c7; --line:#2b3860; --accent:#6ea8fe; --ok:#55d6a1; --danger:#ff7b8a; }
+      * { box-sizing:border-box; } body { margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:radial-gradient(circle at 10% 0,#1e315d 0,transparent 35%),var(--bg); color:#eef3ff; min-height:100vh; }
+      main { width:min(920px,calc(100% - 32px)); margin:48px auto; } header { display:flex; justify-content:space-between; gap:18px; align-items:start; margin-bottom:24px; }
+      h1 { font-size:clamp(28px,5vw,42px); margin:0 0 8px; } p { color:var(--muted); margin:0; line-height:1.5; } .status { border:1px solid var(--line); border-radius:999px; padding:8px 12px; white-space:nowrap; color:var(--muted); }
+      .status.ok { color:var(--ok); border-color:#28775e; } .grid { display:grid; grid-template-columns: 1fr 1.25fr; gap:18px; } .card { background:color-mix(in srgb,var(--panel) 92%,transparent); border:1px solid var(--line); border-radius:16px; padding:20px; box-shadow:0 18px 40px #0004; }
+      h2 { margin:0 0 16px; font-size:18px; } label { display:block; margin:12px 0 6px; color:var(--muted); font-size:14px; } input,textarea { width:100%; border:1px solid var(--line); border-radius:9px; background:#0c1327; color:#eef3ff; padding:11px; font:inherit; } textarea { min-height:92px; resize:vertical; }
+      button { border:0; border-radius:9px; background:var(--accent); color:#06122b; font-weight:700; padding:11px 14px; cursor:pointer; margin-top:14px; } button.secondary { background:transparent; color:#c9d6fa; border:1px solid var(--line); margin-left:8px; } button:hover { filter:brightness(1.08); }
+      .hint { font-size:13px; margin-top:10px; } .message { min-height:24px; margin-top:12px; color:var(--muted); } .message.error { color:var(--danger); } .tasks { display:grid; gap:10px; } .task { border:1px solid var(--line); border-radius:10px; padding:13px; background:#0d152a; } .task h3 { margin:0 0 6px; font-size:16px; } .task small { color:var(--muted); } .empty { color:var(--muted); padding:22px 0; text-align:center; }
+      @media (max-width:720px) { main { margin:26px auto; } header { display:block; } .status { display:inline-block; margin-top:12px; } .grid { grid-template-columns:1fr; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div><h1>Secure Task Manager</h1><p>Local task dashboard with protected API access.</p></div>
+        <div id="health" class="status">Checking service…</div>
+      </header>
+      <section class="grid">
+        <div class="card">
+          <h2>Access</h2>
+          <label for="token">API token</label>
+          <input id="token" type="password" autocomplete="off" placeholder="Paste your local API token">
+          <p class="hint">The token is kept only in this browser tab and is never sent anywhere except this local API.</p>
+          <button id="save-token" type="button">Connect</button><button id="forget-token" class="secondary" type="button">Forget</button>
+          <div id="message" class="message"></div>
+          <h2 style="margin-top:28px">Create task</h2>
+          <form id="task-form">
+            <label for="title">Title</label><input id="title" maxlength="200" required placeholder="Example: prepare deployment demo">
+            <label for="description">Description</label><textarea id="description" maxlength="1000" placeholder="Optional details"></textarea>
+            <button type="submit">Create task</button>
+          </form>
+        </div>
+        <div class="card"><h2>Tasks</h2><div id="tasks" class="tasks"><div class="empty">Connect with your token to load tasks.</div></div></div>
+      </section>
+    </main>
+    <script>
+      const tokenInput = document.querySelector('#token'); const message = document.querySelector('#message'); const tasks = document.querySelector('#tasks');
+      tokenInput.value = sessionStorage.getItem('taskManagerToken') || '';
+      const headers = () => ({ 'X-API-Key': tokenInput.value, 'Content-Type': 'application/json' });
+      const note = (text, error=false) => { message.textContent=text; message.className='message'+(error?' error':''); };
+      async function loadTasks() { if (!tokenInput.value) return; const response = await fetch('/tasks',{headers:headers()}); if (!response.ok) throw new Error(response.status===401?'Token is invalid or missing.':'Unable to load tasks.'); const items=await response.json(); tasks.innerHTML=items.length?items.map(task=>`<article class="task"><h3>${escapeHtml(task.title)}</h3>${task.description?`<p>${escapeHtml(task.description)}</p>`:''}<small>${new Date(task.created_at+'Z').toLocaleString()}</small></article>`).join(''):'<div class="empty">No tasks yet. Create the first one.</div>'; }
+      function escapeHtml(value) { const node=document.createElement('span'); node.textContent=value; return node.innerHTML; }
+      document.querySelector('#save-token').onclick=async()=>{ sessionStorage.setItem('taskManagerToken',tokenInput.value); try { await loadTasks(); note('Connected.'); } catch(error) { note(error.message,true); } };
+      document.querySelector('#forget-token').onclick=()=>{ sessionStorage.removeItem('taskManagerToken'); tokenInput.value=''; tasks.innerHTML='<div class="empty">Connect with your token to load tasks.</div>'; note('Token removed from this tab.'); };
+      document.querySelector('#task-form').onsubmit=async(event)=>{ event.preventDefault(); try { const response=await fetch('/tasks',{method:'POST',headers:headers(),body:JSON.stringify({title:document.querySelector('#title').value,description:document.querySelector('#description').value||null})}); if (!response.ok) throw new Error(response.status===401?'Token is invalid or missing.':'Unable to create task.'); event.target.reset(); await loadTasks(); note('Task created.'); } catch(error) { note(error.message,true); } };
+      fetch('/health').then(response=>{ if(!response.ok) throw new Error(); document.querySelector('#health').textContent='● Service online'; document.querySelector('#health').classList.add('ok'); }).catch(()=>{ document.querySelector('#health').textContent='● Service unavailable'; });
+      if (tokenInput.value) document.querySelector('#save-token').click();
+    </script>
+  </body>
+</html>

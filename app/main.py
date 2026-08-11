@@ -3,6 +3,7 @@ import secrets
 from datetime import datetime
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 from prometheus_fastapi_instrumentator import Instrumentator
 from sqlalchemy import DateTime, String, create_engine, select
@@ -46,6 +47,11 @@ app = FastAPI(
     redoc_url=None if is_production else "/redoc",
 )
 Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
+
+
+@app.get("/", include_in_schema=False)
+def dashboard() -> FileResponse:
+    return FileResponse("app/static/index.html")
 
 
 @app.on_event("startup")
