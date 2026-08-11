@@ -19,7 +19,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: api
-          image: registry.secure-task-manager.svc.cluster.local:5000/secure-task-manager-api:latest
+          image: ghcr.io/kostaran228/secure-task-manager:v0.1.1
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
