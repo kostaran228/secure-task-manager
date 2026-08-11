@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Мой сервер</title>
+    <style>
+      :root { color-scheme:dark; --bg:#0b1020; --panel:#151d35; --line:#2b3860; --muted:#9aa7c7; --accent:#6ea8fe; --ok:#55d6a1; --danger:#ff7b8a; } *{box-sizing:border-box} body{margin:0;min-height:100vh;font-family:Inter,Segoe UI,Arial,sans-serif;color:#eef3ff;background:radial-gradient(circle at 10% 0,#1e315d 0,transparent 35%),var(--bg)} main{width:min(680px,calc(100% - 32px));margin:52px auto}.card{border:1px solid var(--line);border-radius:16px;background:var(--panel);padding:24px;box-shadow:0 18px 40px #0004}h1{margin:0 0 8px;font-size:clamp(28px,5vw,40px)}p{color:var(--muted);line-height:1.5}button,a{display:inline-block;border:0;border-radius:9px;background:var(--accent);color:#06122b;font-weight:700;padding:11px 14px;cursor:pointer;text-decoration:none;margin:12px 8px 0 0}.secondary{background:transparent;color:#dce7ff;border:1px solid var(--line)}.ok{color:var(--ok);font-weight:700}.error{color:var(--danger)}code{display:block;padding:10px;border:1px solid var(--line);border-radius:9px;background:#0c1327;color:#dce7ff;overflow-wrap:anywhere}
+    </style>
+  </head>
+  <body>
+    <main><section class="card"><h1>Мой локальный сервер</h1><p>Создай независимый сервер для своей команды на этом компьютере. Затем подключай телефоны и другие устройства по QR-коду.</p><p id="state">Проверка состояния…</p><div id="actions" hidden><button id="claim" type="button">Сделать этот сервер моим</button><a class="secondary" href="/">Назад к задачам</a></div><div id="configured" hidden><a href="/admin">Открыть панель администратора</a><a class="secondary" href="/">Назад к задачам</a></div><p>Сам сервер запускается на компьютере владельца через <code>scripts/start-local-server.ps1</code>. Мобильное приложение подключается к нему, но не запускает Docker на телефоне.</p><p id="message"></p></section></main>
+    <script>
+      const token=localStorage.getItem('taskManagerAccessToken')||sessionStorage.getItem('taskManagerAccessToken');
+      const state=document.querySelector('#state'), message=document.querySelector('#message');
+      async function load(){const response=await fetch('/server/setup/status'); const data=await response.json(); if(data.configured){state.innerHTML='<span class="ok">● Этот сервер уже настроен.</span>';document.querySelector('#configured').hidden=false;}else{state.textContent='Сервер ещё не настроен. Войди в аккаунт и назначь себя владельцем этой установки.';document.querySelector('#actions').hidden=false;}}
+      document.querySelector('#claim').onclick=async()=>{if(!token){window.location.replace('/');return;}const response=await fetch('/server/setup/claim',{method:'POST',headers:{Authorization:`Bearer ${token}`}});const data=await response.json();if(!response.ok){message.textContent=data.detail||'Не удалось настроить сервер.';message.className='error';return;}window.location.replace('/admin');};
+      load().catch(()=>{state.textContent='Не удалось получить состояние сервера.';state.className='error';});
+    </script>
+  </body>
+</html>

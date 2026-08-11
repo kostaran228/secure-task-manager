@@ -120,6 +120,10 @@ class AiStatus(BaseModel):
     models: list[str] = []
 
 
+class ServerSetupStatus(BaseModel):
+    configured: bool
+
+
 class GroupCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
 
@@ -163,7 +167,6 @@ def create_tables() -> None:
             connection.exec_driver_sql("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_server_admin BOOLEAN NOT NULL DEFAULT FALSE")
             connection.exec_driver_sql("UPDATE users SET username = CONCAT('user-', id) WHERE username IS NULL")
             connection.exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_username ON users (username)")
-            connection.exec_driver_sql("UPDATE users SET is_server_admin = TRUE WHERE id = (SELECT MIN(id) FROM users) AND NOT EXISTS (SELECT 1 FROM users WHERE is_server_admin = TRUE)")
 
 
 def normalized_username(username: str) -> str:
@@ -233,6 +236,32 @@ def admin_dashboard() -> FileResponse:
     return FileResponse("app/static/admin.html")
 
 
+@app.get("/setup", include_in_schema=False)
+def server_setup_dashboard() -> FileResponse:
+    return FileResponse("app/static/setup.html")
+
+
+@app.get("/server/setup/status", response_model=ServerSetupStatus)
+def server_setup_status() -> ServerSetupStatus:
+    with Session(engine) as session:
+        configured = session.scalar(select(User.id).where(User.is_server_admin.is_(True))) is not None
+        return ServerSetupStatus(configured=configured)
+
+
+@app.post("/server/setup/claim")
+def claim_server(user: User = Depends(current_user)) -> dict[str, str]:
+    with Session(engine) as session:
+        existing_owner = session.scalar(select(User).where(User.is_server_admin.is_(True)))
+        if existing_owner is not None and existing_owner.id != user.id:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This server already has an owner")
+        owner = session.get(User, user.id)
+        if owner is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+        owner.is_server_admin = True
+        session.commit()
+        return {"status": "server owner configured"}
+
+
 @app.get("/admin/status", response_model=AdminStatus)
 def admin_status(_: User = Depends(server_admin)) -> AdminStatus:
     return AdminStatus(server_url=SERVER_URL, pairing_code=PAIRING_CODE)
@@ -274,8 +303,7 @@ def register(payload: Credentials) -> AccessToken:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username is already taken")
         # The legacy email column remains for database compatibility; it never
         # receives a real address and is not used for authentication.
-        first_server_admin = session.scalar(select(User.id).where(User.is_server_admin.is_(True))) is None
-        user = User(username=username, email=f"{username}@local.invalid", password_hash=password_hash.hash(payload.password), is_server_admin=first_server_admin)
+        user = User(username=username, email=f"{username}@local.invalid", password_hash=password_hash.hash(payload.password))
         session.add(user)
         session.commit()
         session.refresh(user)
