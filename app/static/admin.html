@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Панель администратора</title>
+    <style>
+      :root { color-scheme:dark; --bg:#0b1020; --panel:#151d35; --line:#2b3860; --muted:#9aa7c7; --accent:#6ea8fe; --ok:#55d6a1; } * { box-sizing:border-box; } body { margin:0; min-height:100vh; font-family:Inter,Segoe UI,Arial,sans-serif; color:#eef3ff; background:radial-gradient(circle at 10% 0,#1e315d 0,transparent 35%),var(--bg); } main { width:min(780px,calc(100% - 32px)); margin:52px auto; } header { display:flex; justify-content:space-between; gap:16px; align-items:center; margin-bottom:24px; } h1 { margin:0 0 8px; font-size:clamp(28px,5vw,40px); } p { color:var(--muted); line-height:1.5; } a { color:#dce7ff; text-decoration:none; border:1px solid var(--line); border-radius:9px; padding:10px 13px; font-weight:700; } .card { border:1px solid var(--line); border-radius:16px; background:var(--panel); padding:22px; box-shadow:0 18px 40px #0004; margin-bottom:16px; } .state { color:var(--ok); font-weight:700; } .pairing { display:flex; align-items:center; gap:20px; flex-wrap:wrap; margin-top:18px; } #qr { width:180px; height:180px; padding:10px; background:#fff; border-radius:12px; } code { display:block; margin-top:6px; padding:10px; border:1px solid var(--line); border-radius:9px; background:#0c1327; color:#dce7ff; overflow-wrap:anywhere; } button { border:0; border-radius:9px; background:var(--accent); color:#06122b; font-weight:700; padding:11px 14px; cursor:pointer; margin-top:14px; } .error { color:#ff7b8a; } @media(max-width:600px) { main { margin:28px auto; } header { align-items:flex-start; flex-direction:column; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header><div><h1>Панель администратора</h1><p>Управление локальным сервером и подключением устройств.</p></div><a href="/">← К задачам</a></header>
+      <section class="card"><h2>Состояние сервера</h2><p id="status">Проверка…</p><p>Сервер запускается отдельным файлом <code>scripts/start-local-server.ps1</code>. Это ограничение безопасности Windows: веб-страница не может запускать Docker сама.</p></section>
+      <section class="card"><h2>Подключение команды</h2><p>Покажи QR-код человеку в той же Wi‑Fi сети. Он откроет адрес сервера, создаст имя пользователя и пароль, после чего ты добавишь его в группу.</p><div class="pairing"><img id="qr" alt="QR-код подключения"><div><strong>Код подключения</strong><code id="pairing-code">—</code><strong>Адрес сервера</strong><code id="server-address">—</code><button id="copy-address" type="button">Скопировать адрес</button></div></div></section>
+      <p id="message"></p>
+    </main>
+    <script>
+      const token = localStorage.getItem('taskManagerAccessToken') || sessionStorage.getItem('taskManagerAccessToken');
+      const message = document.querySelector('#message');
+      const headers = { Authorization: `Bearer ${token}` };
+      async function loadAdminPanel() {
+        if (!token) { window.location.replace('/'); return; }
+        const response = await fetch('/admin/status', { headers });
+        if (!response.ok) { message.textContent='Нет доступа к панели администратора.'; message.className='error'; return; }
+        const data = await response.json();
+        document.querySelector('#status').innerHTML=`<span class="state">● Сервер запущен</span> · ${data.server_url}`;
+        document.querySelector('#pairing-code').textContent=data.pairing_code;
+        document.querySelector('#server-address').textContent=data.server_url;
+        const qr=await fetch('/admin/pairing/qr.svg',{headers});
+        if(qr.ok) document.querySelector('#qr').src=URL.createObjectURL(await qr.blob());
+        document.querySelector('#copy-address').onclick=async()=>{ await navigator.clipboard.writeText(data.server_url); message.textContent='Адрес сервера скопирован.'; };
+      }
+      loadAdminPanel().catch(()=>{ message.textContent='Не удалось загрузить панель.'; message.className='error'; });
+    </script>
+  </body>
+</html>

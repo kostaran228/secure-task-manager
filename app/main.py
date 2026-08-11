@@ -68,6 +68,7 @@ class User(Base):
     # email is retained only to preserve data from early local versions.
     email: Mapped[str | None] = mapped_column(String(320), unique=True, index=True, nullable=True)
     username: Mapped[str | None] = mapped_column(String(32), unique=True, index=True, nullable=True)
+    is_server_admin: Mapped[bool] = mapped_column(default=False, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -99,11 +100,16 @@ class AccessToken(BaseModel):
 
 class UserProfile(BaseModel):
     username: str
+    is_server_admin: bool
 
 
 class PairingInfo(BaseModel):
     server_url: str
     pairing_code: str
+
+
+class AdminStatus(PairingInfo):
+    server_status: str = "running"
 
 
 class GroupCreate(BaseModel):
@@ -146,8 +152,10 @@ def create_tables() -> None:
             connection.exec_driver_sql("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS group_id INTEGER")
             connection.exec_driver_sql("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assignee_id INTEGER")
             connection.exec_driver_sql("ALTER TABLE users ADD COLUMN IF NOT EXISTS username VARCHAR(32)")
+            connection.exec_driver_sql("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_server_admin BOOLEAN NOT NULL DEFAULT FALSE")
             connection.exec_driver_sql("UPDATE users SET username = CONCAT('user-', id) WHERE username IS NULL")
             connection.exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_username ON users (username)")
+            connection.exec_driver_sql("UPDATE users SET is_server_admin = TRUE WHERE id = (SELECT MIN(id) FROM users) AND NOT EXISTS (SELECT 1 FROM users WHERE is_server_admin = TRUE)")
 
 
 def normalized_username(username: str) -> str:
@@ -206,6 +214,31 @@ def pairing_info() -> PairingInfo:
     return PairingInfo(server_url=SERVER_URL, pairing_code=PAIRING_CODE)
 
 
+def server_admin(user: User = Depends(current_user)) -> User:
+    if not user.is_server_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Server administrator access is required")
+    return user
+
+
+@app.get("/admin", include_in_schema=False)
+def admin_dashboard() -> FileResponse:
+    return FileResponse("app/static/admin.html")
+
+
+@app.get("/admin/status", response_model=AdminStatus)
+def admin_status(_: User = Depends(server_admin)) -> AdminStatus:
+    return AdminStatus(server_url=SERVER_URL, pairing_code=PAIRING_CODE)
+
+
+@app.get("/admin/pairing/qr.svg", include_in_schema=False)
+def admin_pairing_qr(_: User = Depends(server_admin)) -> Response:
+    payload = json.dumps({"server_url": SERVER_URL, "pairing_code": PAIRING_CODE})
+    image = qrcode.make(payload, image_factory=qrcode.image.svg.SvgPathImage)
+    output = BytesIO()
+    image.save(output)
+    return Response(content=output.getvalue(), media_type="image/svg+xml")
+
+
 @app.get("/pairing/qr.svg", include_in_schema=False)
 def pairing_qr() -> Response:
     payload = json.dumps({"server_url": SERVER_URL, "pairing_code": PAIRING_CODE})
@@ -223,7 +256,8 @@ def register(payload: Credentials) -> AccessToken:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username is already taken")
         # The legacy email column remains for database compatibility; it never
         # receives a real address and is not used for authentication.
-        user = User(username=username, email=f"{username}@local.invalid", password_hash=password_hash.hash(payload.password))
+        first_server_admin = session.scalar(select(User.id).where(User.is_server_admin.is_(True))) is None
+        user = User(username=username, email=f"{username}@local.invalid", password_hash=password_hash.hash(payload.password), is_server_admin=first_server_admin)
         session.add(user)
         session.commit()
         session.refresh(user)
@@ -242,7 +276,7 @@ def login(payload: Credentials) -> AccessToken:
 
 @app.get("/auth/me", response_model=UserProfile)
 def me(user: User = Depends(current_user)) -> UserProfile:
-    return UserProfile(username=user.username or f"user-{user.id}")
+    return UserProfile(username=user.username or f"user-{user.id}", is_server_admin=user.is_server_admin)
 
 
 @app.post("/groups", response_model=GroupRead, status_code=status.HTTP_201_CREATED)

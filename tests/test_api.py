@@ -65,7 +65,7 @@ def test_registration_and_login_issue_access_tokens() -> None:
     assert logged_in.status_code == 200
     assert registered.json()["access_token"]
     assert logged_in.json()["token_type"] == "bearer"
-    assert profile.json() == {"username": username}
+    assert profile.json()["username"] == username
 
 
 def test_task_routes_require_sign_in() -> None:
