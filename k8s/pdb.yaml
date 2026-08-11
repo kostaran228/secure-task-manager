@@ -1,0 +1,10 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: task-manager-api
+  namespace: secure-task-manager
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: task-manager-api
