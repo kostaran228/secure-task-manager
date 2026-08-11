@@ -15,6 +15,8 @@ Deliver a small API using a workflow that catches common supply-chain and deploy
 - All task-management routes require an `X-API-Key` token, compared using a constant-time Python comparison.
 - Production disables interactive API documentation, and the Ingress exposes only `/health` and `/tasks`; Prometheus metrics stay inside the cluster.
 - The serverless Worker requires a Cloudflare secret token for every task route and uses parameterized D1 queries.
+- Email/password accounts store Argon2 password hashes, and users receive a 12-hour signed access token after registration or sign-in.
+- Every task query is scoped to the authenticated owner, preventing one account from reading another account's tasks.
 - The FastAPI dependency was upgraded from 0.115.6 to 0.139.2 as part of the audit.
 - A PodDisruptionBudget preserves at least one running API replica during voluntary disruptions.
 

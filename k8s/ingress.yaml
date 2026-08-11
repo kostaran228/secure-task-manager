@@ -23,3 +23,10 @@ spec:
                 name: task-manager-api
                 port:
                   number: 80
+          - path: /auth
+            pathType: Prefix
+            backend:
+              service:
+                name: task-manager-api
+                port:
+                  number: 80
