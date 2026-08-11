@@ -10,3 +10,5 @@ mobile/node_modules/
 mobile/android/.gradle/
 mobile/android/build/
 mobile/android/app/build/
+launcher/TaskManagerLauncher.exe
+launcher/__pycache__/
