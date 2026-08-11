@@ -1,0 +1,6 @@
+CREATE TABLE IF NOT EXISTS tasks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL CHECK(length(title) BETWEEN 1 AND 200),
+  description TEXT CHECK(description IS NULL OR length(description) <= 1000),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

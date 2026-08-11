@@ -3,4 +3,6 @@ __pycache__/
 .venv/
 tasks.db
 .env
+.dev.vars
+cloudflare-worker/.wrangler/
 monitoring/grafana-data/
