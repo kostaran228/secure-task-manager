@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -45,6 +46,17 @@ def docker_executable() -> str | None:
     return None
 
 
+def cloudflared_executable() -> str | None:
+    for candidate in (Path("D:/DevTools/cloudflared/cloudflared.exe"), Path("C:/Program Files (x86)/cloudflared/cloudflared.exe")):
+        if candidate.exists():
+            return str(candidate)
+    for folder in os.environ.get("PATH", "").split(os.pathsep):
+        candidate = Path(folder) / "cloudflared.exe"
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
 class DesktopServerApi:
     """Methods exposed only to the local desktop WebView."""
 
@@ -59,6 +71,47 @@ class DesktopServerApi:
     @staticmethod
     def stop_server() -> dict[str, object]:
         return DesktopServerApi._run_compose("down")
+
+    @staticmethod
+    def tunnel_status() -> dict[str, object]:
+        process = DesktopServerApi.tunnel_process
+        running = process is not None and process.poll() is None
+        return {"available": cloudflared_executable() is not None, "running": running, "url": DesktopServerApi.tunnel_url if running else None}
+
+    @staticmethod
+    def start_tunnel() -> dict[str, object]:
+        existing = DesktopServerApi.tunnel_status()
+        if existing["running"]:
+            return {"ok": True, **existing}
+        executable = cloudflared_executable()
+        if executable is None:
+            return {"ok": False, "message": "Cloudflare Tunnel is not installed yet"}
+        if not Launcher.server_is_ready():
+            return {"ok": False, "message": "Start the server first"}
+        try:
+            DesktopServerApi.tunnel_process = subprocess.Popen([executable, "tunnel", "--url", APP_URL], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, creationflags=WINDOWS_NO_CONSOLE)
+            deadline = time.time() + 20
+            while time.time() < deadline:
+                line = DesktopServerApi.tunnel_process.stdout.readline() if DesktopServerApi.tunnel_process.stdout else ""
+                match = re.search(r"https://[-a-z0-9]+\\.trycloudflare\\.com", line, re.I)
+                if match:
+                    DesktopServerApi.tunnel_url = match.group(0)
+                    return {"ok": True, "running": True, "url": DesktopServerApi.tunnel_url}
+                if DesktopServerApi.tunnel_process.poll() is not None:
+                    break
+            DesktopServerApi.stop_tunnel()
+            return {"ok": False, "message": "Cloudflare Tunnel did not return an address"}
+        except OSError:
+            return {"ok": False, "message": "Cloudflare Tunnel could not be started"}
+
+    @staticmethod
+    def stop_tunnel() -> dict[str, object]:
+        process = DesktopServerApi.tunnel_process
+        if process is not None and process.poll() is None:
+            process.terminate()
+        DesktopServerApi.tunnel_process = None
+        DesktopServerApi.tunnel_url = None
+        return {"ok": True, "running": False}
 
     @staticmethod
     def _run_compose(command: str) -> dict[str, object]:
@@ -188,3 +241,5 @@ class Launcher(tk.Tk):
 
 if __name__ == "__main__":
     Launcher().mainloop()
+    tunnel_process: subprocess.Popen[str] | None = None
+    tunnel_url: str | None = None

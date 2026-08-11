@@ -1,13 +1,17 @@
 import os
 import secrets
 import json
+from base64 import urlsafe_b64encode
 from io import BytesIO
 from datetime import datetime, timedelta, timezone
-from urllib.error import URLError
-from urllib.request import urlopen
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
-from fastapi import Depends, FastAPI, Header, HTTPException, status
-from fastapi.responses import FileResponse, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Request as FastAPIRequest, status
+from fastapi.responses import FileResponse, RedirectResponse, Response
+from google.auth.transport.requests import Request as GoogleRequest
+from google.oauth2 import id_token
 import qrcode
 import qrcode.image.svg
 from jwt import InvalidTokenError, decode, encode
@@ -28,6 +32,9 @@ REMEMBERED_TOKEN_LIFETIME_DAYS = 30
 SERVER_URL = os.getenv("SERVER_URL", "http://localhost:8000").rstrip("/")
 PAIRING_CODE = secrets.token_urlsafe(6)
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
+GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "")
 
 
 class Base(DeclarativeBase):
@@ -76,6 +83,14 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class GoogleIdentity(Base):
+    __tablename__ = "google_identities"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    google_sub: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True, index=True)
+
+
 class TaskCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=1000)
@@ -99,6 +114,10 @@ class Credentials(BaseModel):
 class AccessToken(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
+
+class GoogleAuthStatus(BaseModel):
+    enabled: bool
 
 
 class UserProfile(BaseModel):
@@ -189,6 +208,26 @@ def create_access_token(user: User, remember_me: bool = False) -> str:
     return encode({"sub": str(user.id), "username": user.username, "exp": expires_at}, jwt_secret(), algorithm=TOKEN_ALGORITHM)
 
 
+def google_enabled() -> bool:
+    return bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET and GOOGLE_REDIRECT_URI)
+
+
+def google_state(remember_me: bool) -> str:
+    return encode({"purpose": "google-oauth", "remember": remember_me, "exp": datetime.now(timezone.utc) + timedelta(minutes=10)}, jwt_secret(), algorithm=TOKEN_ALGORITHM)
+
+
+def username_for_google(name: str, session: Session) -> str:
+    base = "".join(character for character in name.casefold() if character.isalnum() or character in "_.-")[:24] or "google-user"
+    base = (base + "---")[:3] if len(base) < 3 else base
+    candidate = base
+    number = 2
+    while session.scalar(select(User.id).where(User.username == candidate)) is not None:
+        suffix = f"-{number}"
+        candidate = f"{base[:32-len(suffix)]}{suffix}"
+        number += 1
+    return candidate
+
+
 def current_user(authorization: str | None = Header(default=None)) -> User:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Sign in to access tasks")
@@ -268,8 +307,11 @@ def admin_status(_: User = Depends(server_admin)) -> AdminStatus:
 
 
 @app.get("/admin/pairing/qr.svg", include_in_schema=False)
-def admin_pairing_qr(_: User = Depends(server_admin)) -> Response:
-    payload = json.dumps({"server_url": SERVER_URL, "pairing_code": PAIRING_CODE})
+def admin_pairing_qr(url: str | None = None, code: str | None = None, _: User = Depends(server_admin)) -> Response:
+    server_url = (url or SERVER_URL).rstrip("/")
+    if not (server_url.startswith("http://") or server_url.startswith("https://")):
+        raise HTTPException(status_code=422, detail="Invalid server URL")
+    payload = json.dumps({"server_url": server_url, "pairing_code": code or PAIRING_CODE})
     image = qrcode.make(payload, image_factory=qrcode.image.svg.SvgPathImage)
     output = BytesIO()
     image.save(output)
@@ -318,6 +360,61 @@ def login(payload: Credentials) -> AccessToken:
         if user is None or not password_hash.verify(payload.password, user.password_hash):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or password")
         return AccessToken(access_token=create_access_token(user, payload.remember_me))
+
+
+@app.get("/auth/google/status", response_model=GoogleAuthStatus)
+def google_auth_status() -> GoogleAuthStatus:
+    return GoogleAuthStatus(enabled=google_enabled())
+
+
+@app.get("/auth/google/start", include_in_schema=False)
+def google_auth_start(remember_me: bool = False) -> RedirectResponse:
+    if not google_enabled():
+        raise HTTPException(status_code=503, detail="Google sign-in is not configured yet")
+    query = urlencode({"client_id": GOOGLE_CLIENT_ID, "redirect_uri": GOOGLE_REDIRECT_URI, "response_type": "code", "scope": "openid profile email", "state": google_state(remember_me), "prompt": "select_account"})
+    return RedirectResponse(f"https://accounts.google.com/o/oauth2/v2/auth?{query}")
+
+
+@app.get("/auth/google/callback", include_in_schema=False)
+def google_auth_callback(code: str, state: str) -> RedirectResponse:
+    if not google_enabled():
+        raise HTTPException(status_code=503, detail="Google sign-in is not configured yet")
+    try:
+        flow = decode(state, jwt_secret(), algorithms=[TOKEN_ALGORITHM])
+        if flow.get("purpose") != "google-oauth":
+            raise InvalidTokenError()
+        body = urlencode({"code": code, "client_id": GOOGLE_CLIENT_ID, "client_secret": GOOGLE_CLIENT_SECRET, "redirect_uri": GOOGLE_REDIRECT_URI, "grant_type": "authorization_code"}).encode()
+        with urlopen(Request("https://oauth2.googleapis.com/token", data=body, headers={"Content-Type": "application/x-www-form-urlencoded"}), timeout=10) as response:
+            tokens = json.loads(response.read())
+        claims = id_token.verify_oauth2_token(tokens["id_token"], GoogleRequest(), GOOGLE_CLIENT_ID)
+        subject = claims["sub"]
+    except (InvalidTokenError, KeyError, HTTPError, URLError, ValueError) as error:
+        raise HTTPException(status_code=401, detail="Google sign-in could not be verified") from error
+    with Session(engine) as session:
+        identity = session.scalar(select(GoogleIdentity).where(GoogleIdentity.google_sub == subject))
+        if identity:
+            user = session.get(User, identity.user_id)
+        else:
+            username = username_for_google(str(claims.get("name") or claims.get("email", "google-user")), session)
+            user = User(username=username, email=f"{username}@google.local.invalid", password_hash=password_hash.hash(urlsafe_b64encode(secrets.token_bytes(32)).decode()))
+            session.add(user)
+            session.flush()
+            session.add(GoogleIdentity(google_sub=subject, user_id=user.id))
+            session.commit()
+        if user is None:
+            raise HTTPException(status_code=401, detail="Google account is unavailable")
+        token = create_access_token(user, bool(flow.get("remember")))
+    response = RedirectResponse("/?google=1")
+    response.set_cookie("task_manager_google_login", token, httponly=True, samesite="lax", secure=GOOGLE_REDIRECT_URI.startswith("https://"), max_age=60)
+    return response
+
+
+@app.get("/auth/google/session", response_model=AccessToken)
+def google_auth_session(request: FastAPIRequest) -> AccessToken:
+    token = request.cookies.get("task_manager_google_login")
+    if not token:
+        raise HTTPException(status_code=401, detail="Google sign-in session is missing or expired")
+    return AccessToken(access_token=token)
 
 
 @app.get("/auth/me", response_model=UserProfile)

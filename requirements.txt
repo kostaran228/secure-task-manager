@@ -6,3 +6,5 @@ prometheus-fastapi-instrumentator==7.0.0
 PyJWT==2.10.1
 pwdlib[argon2]==0.3.0
 qrcode[svg]==8.2
+google-auth==2.40.3
+requests==2.32.4
