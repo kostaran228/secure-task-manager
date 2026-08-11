@@ -1,7 +1,7 @@
 fastapi==0.139.2
 uvicorn[standard]==0.34.0
 sqlalchemy==2.0.36
-psycopg[binary]==3.2.3
+psycopg[binary]==3.3.4
 prometheus-fastapi-instrumentator==7.0.0
 PyJWT==2.10.1
 pwdlib[argon2]==0.3.0
