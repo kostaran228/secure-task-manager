@@ -1,0 +1,26 @@
+{
+  "title": "Secure Task Manager Overview",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "type": "stat",
+      "title": "API targets up",
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "sum(up{job=\"secure-task-manager\"})", "refId": "A" }
+      ],
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 0 }
+    },
+    {
+      "type": "timeseries",
+      "title": "HTTP request rate",
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "sum(rate(http_requests_total[5m]))", "legendFormat": "requests / second", "refId": "A" }
+      ],
+      "gridPos": { "h": 8, "w": 16, "x": 8, "y": 0 }
+    }
+  ]
+}
