@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -23,6 +24,7 @@ TEXT = "#edf3ff"
 MUTED = "#96a6c9"
 ACCENT = "#78aaff"
 SUCCESS = "#58d6a1"
+TUNNEL_STATUS_FILE = Path(os.getenv("TASK_MANAGER_DATA_DIR", "D:/TaskManagerData")) / "cloudflare-tunnel.json"
 
 
 def project_root() -> Path:
@@ -64,6 +66,21 @@ class DesktopServerApi:
     tunnel_url: str | None = None
 
     @staticmethod
+    def _saved_tunnel() -> dict[str, object] | None:
+        try:
+            data = json.loads(TUNNEL_STATUS_FILE.read_text(encoding="utf-8"))
+            os.kill(int(data["pid"]), 0)
+            return data
+        except (OSError, ValueError, KeyError, json.JSONDecodeError, FileNotFoundError):
+            TUNNEL_STATUS_FILE.unlink(missing_ok=True)
+            return None
+
+    @staticmethod
+    def _save_tunnel(process: subprocess.Popen[str], url: str) -> None:
+        TUNNEL_STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        TUNNEL_STATUS_FILE.write_text(json.dumps({"pid": process.pid, "url": url}), encoding="utf-8")
+
+    @staticmethod
     def _read_tunnel_output(process: subprocess.Popen[str]) -> None:
         if process.stdout is None:
             return
@@ -71,6 +88,7 @@ class DesktopServerApi:
             match = re.search(r"https://[-a-z0-9]+\\.trycloudflare\\.com", line, re.I)
             if match:
                 DesktopServerApi.tunnel_url = match.group(0)
+                DesktopServerApi._save_tunnel(process, DesktopServerApi.tunnel_url)
                 return
 
     @staticmethod
@@ -89,7 +107,10 @@ class DesktopServerApi:
     def tunnel_status() -> dict[str, object]:
         process = DesktopServerApi.tunnel_process
         running = process is not None and process.poll() is None
-        return {"available": cloudflared_executable() is not None, "running": running, "url": DesktopServerApi.tunnel_url if running else None}
+        if running:
+            return {"available": cloudflared_executable() is not None, "running": True, "url": DesktopServerApi.tunnel_url}
+        saved = DesktopServerApi._saved_tunnel()
+        return {"available": cloudflared_executable() is not None, "running": saved is not None, "url": saved.get("url") if saved else None}
 
     @staticmethod
     def start_tunnel() -> dict[str, object]:
@@ -115,8 +136,13 @@ class DesktopServerApi:
         process = DesktopServerApi.tunnel_process
         if process is not None and process.poll() is None:
             process.terminate()
+        else:
+            saved = DesktopServerApi._saved_tunnel()
+            if saved:
+                subprocess.run(["taskkill", "/PID", str(saved["pid"]), "/T", "/F"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=WINDOWS_NO_CONSOLE)
         DesktopServerApi.tunnel_process = None
         DesktopServerApi.tunnel_url = None
+        TUNNEL_STATUS_FILE.unlink(missing_ok=True)
         return {"ok": True, "running": False}
 
     @staticmethod
