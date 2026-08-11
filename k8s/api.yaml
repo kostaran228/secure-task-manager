@@ -26,6 +26,8 @@ spec:
           envFrom:
             - secretRef:
                 name: task-manager-secrets
+            - secretRef:
+                name: task-manager-api-auth
             - configMapRef:
                 name: task-manager-config
           resources:
