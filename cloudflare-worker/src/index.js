@@ -8,6 +8,12 @@ function badRequest(message) {
   return json({ detail: message }, 400);
 }
 
+function isAuthorized(request, env) {
+  const expectedToken = env.API_TOKEN;
+  const suppliedToken = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
+  return Boolean(expectedToken && suppliedToken && suppliedToken === expectedToken);
+}
+
 async function parseTask(request) {
   let payload;
   try {
@@ -34,6 +40,10 @@ export async function handleRequest(request, env) {
 
   if (request.method === "GET" && url.pathname === "/health") {
     return json({ status: "ok" });
+  }
+
+  if (url.pathname.startsWith("/tasks") && !isAuthorized(request, env)) {
+    return json({ detail: "Invalid or missing API token" }, 401);
   }
 
   if (request.method === "GET" && url.pathname === "/tasks") {

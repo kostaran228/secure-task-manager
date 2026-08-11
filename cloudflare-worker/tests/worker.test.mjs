@@ -22,7 +22,8 @@ class FakeDatabase {
   }
 }
 
-const env = { DB: new FakeDatabase() };
+const env = { DB: new FakeDatabase(), API_TOKEN: "test-token" };
+const authHeaders = { authorization: "Bearer test-token" };
 
 test("health endpoint is public", async () => {
   const response = await handleRequest(new Request("https://example.workers.dev/health"), env);
@@ -33,11 +34,17 @@ test("health endpoint is public", async () => {
 test("tasks can be created and listed", async () => {
   const create = await handleRequest(new Request("https://example.workers.dev/tasks", {
     method: "POST", body: JSON.stringify({ title: "Deploy edge API" })
+    , headers: authHeaders
   }), env);
   assert.equal(create.status, 201);
   assert.equal((await create.json()).title, "Deploy edge API");
 
-  const list = await handleRequest(new Request("https://example.workers.dev/tasks"), env);
+  const list = await handleRequest(new Request("https://example.workers.dev/tasks", { headers: authHeaders }), env);
   assert.equal(list.status, 200);
   assert.equal((await list.json()).length, 1);
+});
+
+test("task routes reject anonymous requests", async () => {
+  const response = await handleRequest(new Request("https://example.workers.dev/tasks"), env);
+  assert.equal(response.status, 401);
 });

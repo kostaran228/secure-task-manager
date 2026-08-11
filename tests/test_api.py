@@ -1,11 +1,16 @@
+import os
+
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
 from app import main
 
+AUTH_HEADERS = {"X-API-Key": "test-token"}
+
 
 def setup_module() -> None:
+    os.environ["API_TOKEN"] = "test-token"
     main.engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -29,10 +34,17 @@ def test_create_and_list_task() -> None:
     created = client.post(
         "/tasks",
         json={"title": "Write CI pipeline", "description": "Portfolio milestone"},
+        headers=AUTH_HEADERS,
     )
-    tasks = client.get("/tasks")
+    tasks = client.get("/tasks", headers=AUTH_HEADERS)
 
     assert created.status_code == 201
     assert created.json()["title"] == "Write CI pipeline"
     assert tasks.status_code == 200
     assert any(task["id"] == created.json()["id"] for task in tasks.json())
+
+
+def test_task_routes_require_api_token() -> None:
+    response = TestClient(main.app).get("/tasks")
+
+    assert response.status_code == 401

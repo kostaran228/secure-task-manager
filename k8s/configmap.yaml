@@ -5,3 +5,4 @@ metadata:
   namespace: secure-task-manager
 data:
   APP_PORT: "8000"
+  APP_ENV: "production"

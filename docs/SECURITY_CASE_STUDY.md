@@ -12,6 +12,10 @@ Deliver a small API using a workflow that catches common supply-chain and deploy
 - The container runs as a numeric non-root user with dropped Linux capabilities.
 - Kubernetes NetworkPolicy limits API egress to PostgreSQL and DNS.
 - Secrets are injected into Kubernetes and excluded from version control.
+- All task-management routes require an `X-API-Key` token, compared using a constant-time Python comparison.
+- Production disables interactive API documentation, and the Ingress exposes only `/health` and `/tasks`; Prometheus metrics stay inside the cluster.
+- The serverless Worker requires a Cloudflare secret token for every task route and uses parameterized D1 queries.
+- The FastAPI dependency was upgraded from 0.115.6 to 0.139.2 as part of the audit.
 - A PodDisruptionBudget preserves at least one running API replica during voluntary disruptions.
 
 ## Evidence to show

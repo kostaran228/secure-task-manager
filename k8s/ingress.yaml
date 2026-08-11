@@ -9,7 +9,14 @@ spec:
     - host: api.example.com
       http:
         paths:
-          - path: /
+          - path: /health
+            pathType: Exact
+            backend:
+              service:
+                name: task-manager-api
+                port:
+                  number: 80
+          - path: /tasks
             pathType: Prefix
             backend:
               service:

@@ -17,6 +17,7 @@ This directory contains a serverless implementation of the Task Manager API. It 
 
    ```powershell
    npx wrangler d1 execute secure-task-manager-db --remote --file=schema.sql
+   npx wrangler secret put API_TOKEN
    npm test
    npm run deploy
    ```
@@ -34,5 +35,6 @@ The repository demonstrates two deployment approaches for one API: a containeriz
 ## Safety notes
 
 - Do not put credentials into `wrangler.jsonc` or commit `.dev.vars`.
-- Use `wrangler secret put NAME` for any future private value.
+- `API_TOKEN` is mandatory for every `/tasks` request. Store it with `wrangler secret put API_TOKEN`; do not put it in source control.
+- Use `Authorization: Bearer YOUR_TOKEN` when calling the task endpoints.
 - The Worker uses parameterized D1 statements and validates request data before it reaches the database.

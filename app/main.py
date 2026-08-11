@@ -1,7 +1,8 @@
 import os
+import secrets
 from datetime import datetime
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 from prometheus_fastapi_instrumentator import Instrumentator
 from sqlalchemy import DateTime, String, create_engine, select
@@ -37,7 +38,13 @@ class TaskRead(TaskCreate):
     created_at: datetime
 
 
-app = FastAPI(title="Secure Task Manager", version="0.1.0")
+is_production = os.getenv("APP_ENV") == "production"
+app = FastAPI(
+    title="Secure Task Manager",
+    version="0.1.0",
+    docs_url=None if is_production else "/docs",
+    redoc_url=None if is_production else "/redoc",
+)
 Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
 
 
@@ -51,7 +58,15 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/tasks", response_model=TaskRead, status_code=status.HTTP_201_CREATED)
+def require_api_token(x_api_key: str | None = Header(default=None)) -> None:
+    expected_token = os.getenv("API_TOKEN")
+    if not expected_token:
+        raise HTTPException(status_code=503, detail="API authentication is not configured")
+    if x_api_key is None or not secrets.compare_digest(x_api_key, expected_token):
+        raise HTTPException(status_code=401, detail="Invalid or missing API token")
+
+
+@app.post("/tasks", response_model=TaskRead, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_api_token)])
 def create_task(payload: TaskCreate) -> Task:
     with Session(engine) as session:
         task = Task(**payload.model_dump())
@@ -61,13 +76,13 @@ def create_task(payload: TaskCreate) -> Task:
         return task
 
 
-@app.get("/tasks", response_model=list[TaskRead])
+@app.get("/tasks", response_model=list[TaskRead], dependencies=[Depends(require_api_token)])
 def list_tasks() -> list[Task]:
     with Session(engine) as session:
         return list(session.scalars(select(Task).order_by(Task.id.desc())))
 
 
-@app.get("/tasks/{task_id}", response_model=TaskRead)
+@app.get("/tasks/{task_id}", response_model=TaskRead, dependencies=[Depends(require_api_token)])
 def get_task(task_id: int) -> Task:
     with Session(engine) as session:
         task = session.get(Task, task_id)

@@ -5,6 +5,8 @@ services:
       - "8000:8000"
     environment:
       DATABASE_URL: postgresql+psycopg://task_user:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/tasks
+      API_TOKEN: ${API_TOKEN:?Set API_TOKEN in .env}
+      APP_ENV: development
     depends_on:
       db:
         condition: service_healthy
