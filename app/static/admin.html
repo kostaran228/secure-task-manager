@@ -13,6 +13,7 @@
       <header><div><h1>Панель администратора</h1><p>Управление локальным сервером и подключением устройств.</p></div><a href="/">← К задачам</a></header>
       <section class="card"><h2>Состояние сервера</h2><p id="status">Проверка…</p><p>Сервер запускается отдельным файлом <code>scripts/start-local-server.ps1</code>. Это ограничение безопасности Windows: веб-страница не может запускать Docker сама.</p></section>
       <section class="card"><h2>Подключение команды</h2><p>Покажи QR-код человеку в той же Wi‑Fi сети. Он откроет адрес сервера, создаст имя пользователя и пароль, после чего ты добавишь его в группу.</p><div class="pairing"><img id="qr" alt="QR-код подключения"><div><strong>Код подключения</strong><code id="pairing-code">—</code><strong>Адрес сервера</strong><code id="server-address">—</code><button id="copy-address" type="button">Скопировать адрес</button></div></div></section>
+      <section class="card"><h2>Локальный ИИ-помощник</h2><p id="ai-status">Проверка локального ИИ…</p><p>ИИ по умолчанию не установлен. Когда мы добавим его на компьютер владельца, он будет обслуживать текстовый чат и голосовые команды всей группы, не используя облачные API-ключи.</p><code id="ai-models" hidden></code></section>
       <p id="message"></p>
     </main>
     <script>
@@ -30,6 +31,11 @@
         const qr=await fetch('/admin/pairing/qr.svg',{headers});
         if(qr.ok) document.querySelector('#qr').src=URL.createObjectURL(await qr.blob());
         document.querySelector('#copy-address').onclick=async()=>{ await navigator.clipboard.writeText(data.server_url); message.textContent='Адрес сервера скопирован.'; };
+        const aiResponse=await fetch('/admin/ai/status',{headers});
+        const ai=await aiResponse.json();
+        const aiStatus=document.querySelector('#ai-status');
+        if(ai.available) { aiStatus.innerHTML='<span class="state">● Локальный ИИ готов</span>'; const models=document.querySelector('#ai-models'); models.hidden=false; models.textContent=ai.models.length ? `Модели: ${ai.models.join(', ')}` : 'Ollama запущен, но модель ещё не загружена.'; }
+        else aiStatus.textContent='Локальный ИИ пока не установлен или не запущен.';
       }
       loadAdminPanel().catch(()=>{ message.textContent='Не удалось загрузить панель.'; message.className='error'; });
     </script>

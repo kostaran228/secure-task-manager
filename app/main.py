@@ -3,6 +3,8 @@ import secrets
 import json
 from io import BytesIO
 from datetime import datetime, timedelta, timezone
+from urllib.error import URLError
+from urllib.request import urlopen
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.responses import FileResponse, Response
@@ -25,6 +27,7 @@ TOKEN_LIFETIME_HOURS = 12
 REMEMBERED_TOKEN_LIFETIME_DAYS = 30
 SERVER_URL = os.getenv("SERVER_URL", "http://localhost:8000").rstrip("/")
 PAIRING_CODE = secrets.token_urlsafe(6)
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
 
 
 class Base(DeclarativeBase):
@@ -110,6 +113,11 @@ class PairingInfo(BaseModel):
 
 class AdminStatus(PairingInfo):
     server_status: str = "running"
+
+
+class AiStatus(BaseModel):
+    available: bool
+    models: list[str] = []
 
 
 class GroupCreate(BaseModel):
@@ -237,6 +245,16 @@ def admin_pairing_qr(_: User = Depends(server_admin)) -> Response:
     output = BytesIO()
     image.save(output)
     return Response(content=output.getvalue(), media_type="image/svg+xml")
+
+
+@app.get("/admin/ai/status", response_model=AiStatus)
+def admin_ai_status(_: User = Depends(server_admin)) -> AiStatus:
+    try:
+        with urlopen(f"{OLLAMA_BASE_URL}/api/tags", timeout=2) as response:
+            payload = json.loads(response.read())
+        return AiStatus(available=True, models=[model["name"] for model in payload.get("models", [])])
+    except (URLError, TimeoutError, OSError, json.JSONDecodeError):
+        return AiStatus(available=False)
 
 
 @app.get("/pairing/qr.svg", include_in_schema=False)
