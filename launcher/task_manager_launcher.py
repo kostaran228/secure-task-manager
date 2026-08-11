@@ -9,7 +9,6 @@ import threading
 import time
 import tkinter as tk
 import urllib.request
-import webbrowser
 from pathlib import Path
 from tkinter import messagebox
 
@@ -72,7 +71,7 @@ class Launcher(tk.Tk):
         actions.pack(fill="x", pady=(2, 16))
         self.start_button = self.make_button(actions, "\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u044c \u0441\u0435\u0440\u0432\u0435\u0440", self.start_server, ACCENT, "#07142d")
         self.start_button.pack(side="left", fill="x", expand=True, padx=(0, 6))
-        self.open_button = self.make_button(actions, "\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435", self.open_application, "#253756", TEXT)
+        self.open_button = self.make_button(actions, "\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435", self.open_desktop_app, "#253756", TEXT)
         self.open_button.pack(side="left", fill="x", expand=True, padx=6)
         self.stop_button = self.make_button(actions, "\u041e\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u044c", self.stop_server, "#253756", TEXT)
         self.stop_button.pack(side="left", fill="x", expand=True, padx=(6, 0))
@@ -82,6 +81,11 @@ class Launcher(tk.Tk):
         tk.Label(hint, text="\u0427\u0442\u043e \u0434\u0430\u043b\u044c\u0448\u0435", font=("Segoe UI", 10, "bold"), fg=TEXT, bg=PANEL_ALT).pack(anchor="w")
         tk.Label(hint, text="\u041f\u043e\u0441\u043b\u0435 \u0437\u0430\u043f\u0443\u0441\u043a\u0430 \u043e\u0442\u043a\u0440\u043e\u0439\u0442\u0435 \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435, \u0437\u0430\u0442\u0435\u043c \u0432\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u00ab\u041c\u043e\u0439 \u0441\u0435\u0440\u0432\u0435\u0440\u00bb \u0434\u043b\u044f QR-\u043a\u043e\u0434\u0430 \u0438 \u043d\u0430\u0441\u0442\u0440\u043e\u0435\u043a.", wraplength=540, justify="left", font=("Segoe UI", 10), fg=MUTED, bg=PANEL_ALT).pack(anchor="w", pady=(5, 0))
         self.refresh_status()
+        self.after(700, self.open_when_ready)
+
+    def open_when_ready(self) -> None:
+        if self.server_is_ready():
+            self.open_desktop_app()
 
     @staticmethod
     def make_button(parent: tk.Widget, text: str, command: object, background: str, foreground: str) -> tk.Button:
@@ -123,7 +127,7 @@ class Launcher(tk.Tk):
                     time.sleep(1)
                     if self.server_is_ready():
                         break
-            self.after(0, self.refresh_status)
+            self.after(0, self.open_desktop_app if command == "up" else self.refresh_status)
         except subprocess.CalledProcessError:
             self.after(0, lambda: messagebox.showerror("\u041e\u0448\u0438\u0431\u043a\u0430 \u0437\u0430\u043f\u0443\u0441\u043a\u0430", "\u041f\u0440\u043e\u0432\u0435\u0440\u044c\u0442\u0435, \u0447\u0442\u043e Docker Desktop \u0437\u0430\u043f\u0443\u0449\u0435\u043d."))
 
@@ -135,15 +139,18 @@ class Launcher(tk.Tk):
         self.set_status("\u041e\u0441\u0442\u0430\u043d\u0430\u0432\u043b\u0438\u0432\u0430\u044e \u0441\u0435\u0440\u0432\u0435\u0440...", MUTED)
         threading.Thread(target=self.run_compose, args=("down",), daemon=True).start()
 
-    def open_application(self) -> None:
+    def open_desktop_app(self) -> None:
         if not self.server_is_ready():
             messagebox.showinfo("\u0421\u0435\u0440\u0432\u0435\u0440 \u043e\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d", "\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u0437\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0435 \u0441\u0435\u0440\u0432\u0435\u0440.")
             return
         try:
-            os.startfile(APP_URL)  # type: ignore[attr-defined]
-            self.set_status("● \u0421\u0435\u0440\u0432\u0435\u0440 \u0437\u0430\u043f\u0443\u0449\u0435\u043d", SUCCESS, "\u041e\u0442\u043a\u0440\u044b\u0432\u0430\u044e \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435 \u0432 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0435...")
-        except OSError:
-            webbrowser.open_new_tab(APP_URL)
+            import webview
+
+            self.destroy()
+            webview.create_window("Task Manager", APP_URL, width=1180, height=800, min_size=(900, 620), background_color=BG)
+            webview.start()
+        except Exception as error:
+            messagebox.showerror("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0442\u043a\u0440\u044b\u0442\u044c \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435", str(error))
 
 
 if __name__ == "__main__":
