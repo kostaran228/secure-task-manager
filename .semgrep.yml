@@ -1,0 +1,9 @@
+rules:
+  - id: no-hardcoded-passwords
+    patterns:
+      - pattern-either:
+          - pattern: $PASSWORD = "..."
+          - pattern: $PASSWORD = '...'
+    message: Keep credentials out of source code and inject them through environment variables or a secret manager.
+    languages: [python]
+    severity: ERROR

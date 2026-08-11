@@ -1,0 +1,6 @@
+__pycache__/
+.pytest_cache/
+.venv/
+tasks.db
+.env
+monitoring/grafana-data/
