@@ -377,7 +377,10 @@ def server_admin(user: User = Depends(current_user)) -> User:
 
 @app.get("/admin", include_in_schema=False)
 def admin_dashboard() -> FileResponse:
-    return FileResponse("app/static/admin.html")
+    return FileResponse(
+        "app/static/admin.html",
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", "Pragma": "no-cache"},
+    )
 
 
 @app.get("/setup", include_in_schema=False)
