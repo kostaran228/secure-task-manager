@@ -303,9 +303,13 @@ def local_ai_task_command(text: str, usernames: list[str]) -> str | None:
             return None
         prompt = (
             "Ты переводишь голосовую фразу в JSON для менеджера задач. Никаких пояснений и Markdown. "
-            "Если пользователь явно просит создать или назначить задачу, верни только JSON вида "
-            '{"action":"create","title":"короткое название","assignees":["точное_имя"],"task_type":"once|daily|weekly","points":0}. '
-            "Если это не просьба создать/назначить задачу, верни только {\"action\":\"none\"}. "
+            "Верни только один объект. Доступные action: create, update_title, update_description, assign, complete, approve, delete, list, none. "
+            "Для create: {\"action\":\"create\",\"title\":\"...\",\"assignees\":[\"точное_имя\"],\"task_type\":\"once|daily|weekly\",\"points\":0}. "
+            "Для update_title: {\"action\":\"update_title\",\"task_id\":12,\"title\":\"...\"}. "
+            "Для update_description: {\"action\":\"update_description\",\"task_id\":12,\"description\":\"...\"}. "
+            "Для assign: {\"action\":\"assign\",\"task_id\":12,\"assignees\":[\"точное_имя\"]}. "
+            "Для complete, approve или delete укажи task_id. Для list других полей не нужно. "
+            "Если намерение неясно, верни только {\"action\":\"none\"}. "
             f"Допустимые имена участников: {', '.join(usernames) or 'нет'}. "
             f"Фраза: {text}"
         )
@@ -313,7 +317,20 @@ def local_ai_task_command(text: str, usernames: list[str]) -> str | None:
         request = Request(f"{OLLAMA_BASE_URL}/api/generate", data=payload, headers={"Content-Type": "application/json"})
         with urlopen(request, timeout=60) as response:
             decoded = json.loads(str(json.load(response).get("response", "{}")))
-        if decoded.get("action") != "create" or not isinstance(decoded.get("title"), str) or not decoded["title"].strip():
+        action = decoded.get("action")
+        if action in {"complete", "approve", "delete", "list"}:
+            task_id = decoded.get("task_id")
+            return f"{action} {int(task_id)}" if action != "list" and isinstance(task_id, int) else ("list" if action == "list" else None)
+        if action in {"update_title", "update_description"}:
+            task_id = decoded.get("task_id")
+            field = "title" if action == "update_title" else "description"
+            value = decoded.get(field)
+            return f"{action} {int(task_id)} {str(value).strip()}" if isinstance(task_id, int) and isinstance(value, str) and value.strip() else None
+        if action == "assign":
+            task_id = decoded.get("task_id")
+            assignees = [str(name).casefold() for name in decoded.get("assignees", []) if str(name).casefold() in {name.casefold() for name in usernames}]
+            return f"assign {int(task_id)} {' и '.join(assignees)}" if isinstance(task_id, int) and assignees else None
+        if action != "create" or not isinstance(decoded.get("title"), str) or not decoded["title"].strip():
             return None
         allowed = {name.casefold() for name in usernames}
         assignees = [str(name).casefold() for name in decoded.get("assignees", []) if str(name).casefold() in allowed]
@@ -332,6 +349,78 @@ def assistant_action(session: Session, user: User, text: str) -> tuple[str | Non
     """Safe Russian task commands. The language model never receives direct DB access."""
     command = " ".join(text.strip().split())
     lower = command.casefold()
+
+    def can_manage(task: Task) -> bool:
+        if user.is_server_admin or (task.group_id is None and task.owner_id == user.id):
+            return True
+        if task.group_id is None:
+            return False
+        membership = session.scalar(select(Membership).where(Membership.group_id == task.group_id, Membership.user_id == user.id))
+        return membership is not None and membership.role in {"admin", "manager"}
+
+    def task_by_id(value: str) -> Task | None:
+        return session.get(Task, int(value)) if value.isdigit() else None
+
+    update_title = re.match(r"^(?:измени(?:\s+название)?|переименуй)\s+задачу\s+(\d+)\s+(?:на|в)\s+(.+)$", command, re.IGNORECASE)
+    generated_title = re.match(r"^update_title\s+(\d+)\s+(.+)$", command, re.IGNORECASE)
+    match = update_title or generated_title
+    if match:
+        task = task_by_id(match.group(1))
+        title = match.group(2).strip(" .,!?:;")
+        if task is None or not can_manage(task):
+            return None, None, "Не могу изменить эту задачу: она не найдена или у вас недостаточно прав."
+        if not title:
+            return None, None, "Назовите новое название задачи."
+        task.title = title[:200]
+        session.commit()
+        return "updated", task.id, f"Переименовал задачу в «{task.title}»."
+
+    update_description = re.match(r"^измени\s+описание\s+задачи\s+(\d+)\s+(?:на|в)\s+(.+)$", command, re.IGNORECASE)
+    generated_description = re.match(r"^update_description\s+(\d+)\s+(.+)$", command, re.IGNORECASE)
+    match = update_description or generated_description
+    if match:
+        task = task_by_id(match.group(1))
+        description = match.group(2).strip()
+        if task is None or not can_manage(task):
+            return None, None, "Не могу изменить описание этой задачи: она не найдена или у вас недостаточно прав."
+        task.description = description[:1000]
+        session.commit()
+        return "updated", task.id, "Описание задачи обновлено."
+
+    assign_existing = re.match(r"^(?:назначь|назначить|поставь)\s+задачу\s+(\d+)\s+для\s+(.+)$", command, re.IGNORECASE)
+    generated_assign = re.match(r"^assign\s+(\d+)\s+(.+)$", command, re.IGNORECASE)
+    match = assign_existing or generated_assign
+    if match:
+        task = task_by_id(match.group(1))
+        if task is None or not can_manage(task):
+            return None, None, "Не могу переназначить эту задачу: она не найдена или у вас недостаточно прав."
+        if task.group_id is None:
+            return None, None, "Личную задачу нельзя назначить команде. Создайте новую задачу для участника."
+        actor = session.scalar(select(Membership).where(Membership.group_id == task.group_id, Membership.user_id == user.id))
+        requested_names = [name.strip().casefold() for name in re.split(r"\s*(?:,|\s+и\s+)\s*", match.group(2)) if name.strip()]
+        targets = []
+        for name in requested_names:
+            target = session.scalar(select(User).where(User.username == name))
+            membership = session.scalar(select(Membership).where(Membership.group_id == task.group_id, Membership.user_id == (target.id if target else -1)))
+            if target is None or membership is None:
+                return None, None, f"Участник «{name}» не состоит в команде этой задачи."
+            if not user.is_server_admin and (actor is None or actor.role == "member" or membership.priority >= actor.priority):
+                return None, None, "Назначать можно только участникам с приоритетом ниже вашего."
+            targets.append(target)
+        if not targets:
+            return None, None, "Укажите участника после слова «для»."
+        task.assignee_id = targets[0].id
+        for target in targets[1:]:
+            session.add(Task(title=task.title, description=task.description, owner_id=task.owner_id, reminder_at=task.reminder_at, reminder_interval_minutes=task.reminder_interval_minutes, group_id=task.group_id, assignee_id=target.id, task_type=task.task_type, task_status="pending", points=task.points))
+        session.commit()
+        return "assigned", task.id, f"Задача «{task.title}» назначена: {', '.join(target.username or '' for target in targets)}."
+
+    if lower == "list" or lower in {"покажи задачи", "какие у меня задачи", "список задач"}:
+        tasks = session.scalars(select(Task).where(Task.assignee_id == user.id, Task.task_status != "approved")).all()
+        if not tasks:
+            return "listed", None, "У вас сейчас нет незавершённых задач."
+        preview = "; ".join(f"#{task.id} {task.title}" for task in tasks[:5])
+        return "listed", None, f"Ваши текущие задачи: {preview}."
     create_prefixes = ("создай задачу ", "добавь задачу ", "назначь задачу ", "назначить задачу ", "поставь задачу ")
     prefix = next((item for item in create_prefixes if lower.startswith(item)), None)
     if prefix:
@@ -387,8 +476,8 @@ def assistant_action(session: Session, user: User, text: str) -> tuple[str | Non
         names = ", ".join(assignee.username or "участник" for assignee in assignees)
         destination = f" для {names}" if group_id is not None else ""
         return "created", tasks[0].id, f"Создал задачу «{tasks[0].title}»{destination}. Баллы: {points}."
-    if lower.startswith("выполни задачу "):
-        number = lower.removeprefix("выполни задачу ").strip().split(maxsplit=1)[0]
+    if lower.startswith("выполни задачу ") or lower.startswith("заверши задачу ") or lower.startswith("complete "):
+        number = re.search(r"(\d+)", lower).group(1) if re.search(r"(\d+)", lower) else ""
         if number.isdigit():
             task = session.get(Task, int(number))
             if task and task.assignee_id == user.id and task.task_status == "pending":
@@ -396,8 +485,29 @@ def assistant_action(session: Session, user: User, text: str) -> tuple[str | Non
                 session.commit()
                 return "submitted", task.id, f"Задача «{task.title}» отмечена как выполненная и ждёт подтверждения."
             return None, None, "Не нашёл доступную вам синюю задачу с таким номером."
-    if lower.startswith("удали задачу "):
-        number = lower.removeprefix("удали задачу ").strip().split(maxsplit=1)[0]
+    if lower.startswith("подтверди задачу ") or lower.startswith("approve "):
+        number = re.search(r"(\d+)", lower).group(1) if re.search(r"(\d+)", lower) else ""
+        if number.isdigit():
+            task = session.get(Task, int(number))
+            if task and user.is_server_admin and task.task_status == "submitted":
+                if not task.points_awarded and task.assignee_id is not None:
+                    assignee = session.get(User, task.assignee_id)
+                    if assignee is not None:
+                        assignee.points_balance += task.points
+                    task.points_awarded = True
+                task.task_status = "approved"
+                task.approved_at = datetime.utcnow()
+                if task.task_type == "once":
+                    title = task.title
+                    session.delete(task)
+                    session.commit()
+                    return "approved", int(number), f"Подтвердил выполнение задачи «{title}» и начислил баллы."
+                task.next_occurrence_at = datetime.utcnow() + timedelta(days=1 if task.task_type == "daily" else 7)
+                session.commit()
+                return "approved", task.id, f"Подтвердил выполнение задачи «{task.title}»."
+            return None, None, "Подтверждать можно только жёлтые задачи и только администратору сервера."
+    if lower.startswith("удали задачу ") or lower.startswith("delete "):
+        number = re.search(r"(\d+)", lower).group(1) if re.search(r"(\d+)", lower) else ""
         if number.isdigit():
             task = session.get(Task, int(number))
             allowed = task and (user.is_server_admin or (task.group_id is None and task.owner_id == user.id))
