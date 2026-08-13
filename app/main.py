@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request as FastAPIRequest, status
-from fastapi.responses import FileResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from google.auth.transport.requests import Request as GoogleRequest
 from google.oauth2 import id_token
 import qrcode
@@ -178,8 +178,19 @@ Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_sch
 
 
 @app.get("/", include_in_schema=False)
-def dashboard() -> FileResponse:
-    return FileResponse("app/static/index.html")
+def dashboard() -> HTMLResponse:
+    content = open("app/static/index.html", encoding="utf-8").read()
+    live_updates = """
+    <script>
+      // Group tasks update in-place for every connected participant.
+      setInterval(() => {
+        if (typeof token !== 'undefined' && token && typeof loadTasks === 'function') {
+          loadTasks().catch(() => {});
+        }
+      }, 2000);
+    </script>
+    """
+    return HTMLResponse(content.replace("</body>", live_updates + "</body>"))
 
 
 @app.on_event("startup")
