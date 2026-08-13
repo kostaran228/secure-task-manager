@@ -90,8 +90,8 @@ def test_manager_can_assign_only_to_members() -> None:
     member_username, member_token = register("member")
     admin_headers = {"Authorization": f"Bearer {admin_token}"}
     group_id = client.post("/groups", headers=admin_headers, json={"name": "Portfolio team"}).json()["id"]
-    client.post(f"/groups/{group_id}/members", headers=admin_headers, json={"username": manager_username, "role": "manager"})
-    client.post(f"/groups/{group_id}/members", headers=admin_headers, json={"username": member_username, "role": "member"})
+    client.post(f"/groups/{group_id}/members", headers=admin_headers, json={"username": manager_username, "role": "manager", "priority": 5})
+    client.post(f"/groups/{group_id}/members", headers=admin_headers, json={"username": member_username, "role": "member", "priority": 1})
     manager_headers = {"Authorization": f"Bearer {manager_token}"}
     member_headers = {"Authorization": f"Bearer {member_token}"}
 
@@ -102,6 +102,32 @@ def test_manager_can_assign_only_to_members() -> None:
     assert assigned.status_code == 201
     assert blocked.status_code == 403
     assert member_blocked.status_code == 403
+
+
+def test_priority_limits_assignment_and_allows_multiple_assignees() -> None:
+    client = TestClient(main.app)
+
+    def register(prefix: str) -> tuple[str, str]:
+        username = f"{prefix}-{uuid4().hex[:20]}"
+        token = client.post("/auth/register", json={"username": username, "password": "test-password"}).json()["access_token"]
+        return username, token
+
+    admin_name, admin_token = register("pa")
+    manager_name, manager_token = register("pm")
+    first_name, _ = register("pf")
+    second_name, _ = register("ps")
+    group_id = client.post("/groups", headers={"Authorization": f"Bearer {admin_token}"}, json={"name": "Priorities"}).json()["id"]
+    admin_headers = {"Authorization": f"Bearer {admin_token}"}
+    for username, role, priority in [(manager_name, "manager", 5), (first_name, "member", 2), (second_name, "member", 1)]:
+        assert client.post(f"/groups/{group_id}/members", headers=admin_headers, json={"username": username, "role": role, "priority": priority}).status_code == 201
+
+    manager_headers = {"Authorization": f"Bearer {manager_token}"}
+    created = client.post("/tasks", headers=manager_headers, json={"title": "Shared work", "group_id": group_id, "assignee_usernames": [first_name, second_name], "points": 3})
+    assert created.status_code == 201
+    tasks = client.get("/tasks", headers=manager_headers).json()
+    assert len([task for task in tasks if task["title"] == "Shared work"]) == 2
+    blocked = client.post("/tasks", headers=manager_headers, json={"title": "Not allowed", "group_id": group_id, "assignee_usernames": [manager_name]})
+    assert blocked.status_code == 403
 
 
 def test_task_confirmation_awards_points_and_recurring_task_returns() -> None:

@@ -75,6 +75,7 @@ class Membership(Base):
     group_id: Mapped[int] = mapped_column(ForeignKey("groups.id"), index=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     role: Mapped[str] = mapped_column(String(16), default="member")
+    priority: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
 
 class User(Base):
@@ -104,6 +105,7 @@ class TaskCreate(BaseModel):
     reminder_at: datetime | None = None
     group_id: int | None = None
     assignee_username: str | None = Field(default=None, max_length=32)
+    assignee_usernames: list[str] = Field(default_factory=list, max_length=100)
     task_type: str = Field(default="once", pattern="^(once|daily|weekly)$")
     points: int = Field(default=0, ge=0, le=100000)
 
@@ -165,6 +167,11 @@ class GroupCreate(BaseModel):
 class MemberAdd(BaseModel):
     username: str
     role: str
+    priority: int = Field(default=1, ge=0, le=100000)
+
+
+class MemberPriorityUpdate(BaseModel):
+    priority: int = Field(ge=0, le=100000)
 
 
 class GroupRead(BaseModel):
@@ -176,6 +183,7 @@ class GroupRead(BaseModel):
 class GroupMemberRead(BaseModel):
     username: str
     role: str
+    priority: int
 
 
 class RegisteredUserRead(BaseModel):
@@ -226,6 +234,12 @@ def create_tables() -> None:
             connection.exec_driver_sql("ALTER TABLE users ADD COLUMN IF NOT EXISTS username VARCHAR(32)")
             connection.exec_driver_sql("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_server_admin BOOLEAN NOT NULL DEFAULT FALSE")
             connection.exec_driver_sql("ALTER TABLE users ADD COLUMN IF NOT EXISTS points_balance INTEGER NOT NULL DEFAULT 0")
+            connection.exec_driver_sql("ALTER TABLE memberships ADD COLUMN IF NOT EXISTS priority INTEGER NOT NULL DEFAULT 1")
+            connection.exec_driver_sql("CREATE TABLE IF NOT EXISTS app_settings (key VARCHAR(64) PRIMARY KEY, value VARCHAR(64) NOT NULL)")
+            initialized = connection.exec_driver_sql("SELECT value FROM app_settings WHERE key = 'membership_priority_v1'").scalar()
+            if initialized is None:
+                connection.exec_driver_sql("UPDATE memberships SET priority = CASE role WHEN 'admin' THEN 10 WHEN 'manager' THEN 5 ELSE 1 END")
+                connection.exec_driver_sql("INSERT INTO app_settings(key, value) VALUES ('membership_priority_v1', 'done')")
             connection.exec_driver_sql("UPDATE users SET username = CONCAT('user-', id) WHERE username IS NULL")
             connection.exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_username ON users (username)")
 
@@ -287,6 +301,7 @@ def current_user(authorization: str | None = Header(default=None)) -> User:
 
 
 ROLE_RANK = {"member": 1, "manager": 2, "admin": 3}
+DEFAULT_PRIORITY = {"member": 1, "manager": 5, "admin": 10}
 
 
 def membership_for(session: Session, group_id: int, user_id: int) -> Membership:
@@ -501,7 +516,7 @@ def create_group(payload: GroupCreate, user: User = Depends(current_user)) -> Gr
         group = Group(name=payload.name.strip())
         session.add(group)
         session.flush()
-        session.add(Membership(group_id=group.id, user_id=user.id, role="admin"))
+        session.add(Membership(group_id=group.id, user_id=user.id, role="admin", priority=DEFAULT_PRIORITY["admin"]))
         session.commit()
         return GroupRead(id=group.id, name=group.name, role="admin")
 
@@ -521,16 +536,36 @@ def add_member(group_id: int, payload: MemberAdd, user: User = Depends(current_u
         actor = membership_for(session, group_id, user.id)
         if actor.role != "admin":
             raise HTTPException(status_code=403, detail="Only an admin can manage group roles")
+        if not user.is_server_admin and payload.priority >= actor.priority:
+            raise HTTPException(status_code=403, detail="A participant must have a lower priority than the administrator")
         target = session.scalar(select(User).where(User.username == normalized_username(payload.username)))
         if target is None:
             raise HTTPException(status_code=404, detail="This username has not registered yet")
         existing = session.scalar(select(Membership).where(Membership.group_id == group_id, Membership.user_id == target.id))
         if existing:
             existing.role = payload.role
+            existing.priority = payload.priority
         else:
-            session.add(Membership(group_id=group_id, user_id=target.id, role=payload.role))
+            session.add(Membership(group_id=group_id, user_id=target.id, role=payload.role, priority=payload.priority))
         session.commit()
         return {"status": "member updated"}
+
+
+@app.patch("/groups/{group_id}/members/{username}")
+def update_member_priority(group_id: int, username: str, payload: MemberPriorityUpdate, user: User = Depends(current_user)) -> dict[str, str]:
+    with Session(engine) as session:
+        actor = membership_for(session, group_id, user.id)
+        if actor.role != "admin":
+            raise HTTPException(status_code=403, detail="Only a team administrator can change priorities")
+        target = session.scalar(select(User).where(User.username == normalized_username(username)))
+        target_membership = membership_for(session, group_id, target.id) if target else None
+        if target_membership is None:
+            raise HTTPException(status_code=404, detail="This participant is not in the group")
+        if target_membership.user_id != user.id and payload.priority >= actor.priority:
+            raise HTTPException(status_code=403, detail="A participant cannot be given priority equal to or above the administrator")
+        target_membership.priority = payload.priority
+        session.commit()
+        return {"status": "priority updated"}
 
 
 @app.get("/groups/{group_id}/members", response_model=list[GroupMemberRead])
@@ -538,37 +573,42 @@ def list_group_members(group_id: int, user: User = Depends(current_user)) -> lis
     with Session(engine) as session:
         membership_for(session, group_id, user.id)
         rows = session.execute(
-            select(User.username, Membership.role)
+            select(User.username, Membership.role, Membership.priority)
             .join(Membership, Membership.user_id == User.id)
             .where(Membership.group_id == group_id)
-            .order_by(User.username)
+            .order_by(Membership.priority.desc(), User.username)
         ).all()
-        return [GroupMemberRead(username=username or "unknown", role=role) for username, role in rows]
+        return [GroupMemberRead(username=username or "unknown", role=role, priority=priority) for username, role, priority in rows]
 
 
 @app.post("/tasks", response_model=TaskRead, status_code=status.HTTP_201_CREATED)
 def create_task(payload: TaskCreate, user: User = Depends(current_user)) -> Task:
     with Session(engine) as session:
-        assignee_id = user.id
+        assignee_ids = [user.id]
         if payload.group_id is not None:
             actor = membership_for(session, payload.group_id, user.id)
             if actor.role == "member":
                 raise HTTPException(status_code=403, detail="Members cannot assign group tasks")
-            if payload.assignee_username is None:
+            requested_names = payload.assignee_usernames or ([payload.assignee_username] if payload.assignee_username else [])
+            requested_names = list(dict.fromkeys(normalized_username(name) for name in requested_names))
+            if not requested_names:
                 raise HTTPException(status_code=422, detail="Choose a group member to assign this task")
-            target = session.scalar(select(User).where(User.username == normalized_username(payload.assignee_username)))
-            target_membership = membership_for(session, payload.group_id, target.id) if target else None
-            if target_membership is None:
-                raise HTTPException(status_code=404, detail="Assignee is not in this group")
-            if actor.role == "manager" and ROLE_RANK[target_membership.role] >= ROLE_RANK[actor.role]:
-                raise HTTPException(status_code=403, detail="Managers can assign tasks only to members")
-            assignee_id = target.id
-        task_data = payload.model_dump(exclude={"assignee_username"})
-        task = Task(**task_data, owner_id=user.id, assignee_id=assignee_id)
-        session.add(task)
+            assignee_ids = []
+            for name in requested_names:
+                target = session.scalar(select(User).where(User.username == name))
+                target_membership = membership_for(session, payload.group_id, target.id) if target else None
+                if target_membership is None:
+                    raise HTTPException(status_code=404, detail=f"Assignee {name} is not in this group")
+                if not user.is_server_admin and target_membership.priority >= actor.priority:
+                    raise HTTPException(status_code=403, detail="Tasks can be assigned only to participants with a lower priority")
+                assignee_ids.append(target.id)
+        task_data = payload.model_dump(exclude={"assignee_username", "assignee_usernames"})
+        # Every participant gets an independent copy: each can submit it and receive points separately.
+        tasks = [Task(**task_data, owner_id=user.id, assignee_id=assignee_id) for assignee_id in assignee_ids]
+        session.add_all(tasks)
         session.commit()
-        session.refresh(task)
-        return task
+        session.refresh(tasks[0])
+        return tasks[0]
 
 
 @app.post("/tasks/{task_id}/complete")
