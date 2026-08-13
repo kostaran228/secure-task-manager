@@ -25,6 +25,7 @@ MUTED = "#96a6c9"
 ACCENT = "#78aaff"
 SUCCESS = "#58d6a1"
 TUNNEL_STATUS_FILE = Path(os.getenv("TASK_MANAGER_DATA_DIR", "D:/TaskManagerData")) / "cloudflare-tunnel.json"
+WEBVIEW_STORAGE = Path(os.getenv("TASK_MANAGER_DATA_DIR", "D:/TaskManagerData")) / "desktop-webview"
 
 
 def project_root() -> Path:
@@ -266,7 +267,8 @@ class Launcher(tk.Tk):
 
             self.destroy()
             webview.create_window("Task Manager", APP_URL, width=1180, height=800, min_size=(900, 620), background_color=BG, js_api=DesktopServerApi())
-            webview.start()
+            WEBVIEW_STORAGE.mkdir(parents=True, exist_ok=True)
+            webview.start(private_mode=False, storage_path=str(WEBVIEW_STORAGE))
         except Exception as error:
             messagebox.showerror("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0442\u043a\u0440\u044b\u0442\u044c \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435", str(error))
 
