@@ -218,7 +218,10 @@ def dashboard() -> HTMLResponse:
       }, 2000);
     </script>
     """
-    return HTMLResponse(content.replace("</body>", live_updates + "</body>"))
+    return HTMLResponse(
+        content.replace("</body>", live_updates + "</body>"),
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", "Pragma": "no-cache"},
+    )
 
 
 @app.on_event("startup")
