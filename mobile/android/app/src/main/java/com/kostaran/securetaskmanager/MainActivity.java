@@ -58,6 +58,24 @@ public class MainActivity extends BridgeActivity {
         getBridge().getWebView().postDelayed(() -> getBridge().getWebView().loadUrl(savedServer), 900);
     }
 
+    private void showConnectionSetup() {
+        connectionStore().edit().remove(SERVER_URL_KEY).commit();
+        restoredConnection = false;
+        // This is Capacitor's bundled connection screen, available even when the remote tunnel is offline.
+        getBridge().getWebView().loadUrl("http://localhost");
+    }
+
+    @Override
+    public void onBackPressed() {
+        String currentUrl = getBridge().getWebView().getUrl();
+        String savedServer = connectionStore().getString(SERVER_URL_KEY, "");
+        if (!savedServer.isBlank() && currentUrl != null && !currentUrl.startsWith("http://localhost")) {
+            showConnectionSetup();
+            return;
+        }
+        super.onBackPressed();
+    }
+
     private void sendVoiceResult(String name, String value) {
         String script = "window." + name + " && window." + name + "(" + JSONObject.quote(value) + ");";
         getBridge().getWebView().evaluateJavascript(script, null);
@@ -124,8 +142,7 @@ public class MainActivity extends BridgeActivity {
 
         @JavascriptInterface
         public void forgetServer() {
-            connectionStore().edit().remove(SERVER_URL_KEY).commit();
-            restoredConnection = false;
+            runOnUiThread(() -> showConnectionSetup());
         }
 
         @JavascriptInterface
