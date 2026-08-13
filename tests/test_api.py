@@ -99,3 +99,34 @@ def test_manager_can_assign_only_to_members() -> None:
     assert assigned.status_code == 201
     assert blocked.status_code == 403
     assert member_blocked.status_code == 403
+
+
+def test_task_confirmation_awards_points_and_recurring_task_returns() -> None:
+    client = TestClient(main.app)
+
+    def register(prefix: str) -> tuple[str, str]:
+        username = f"{prefix}-{uuid4().hex[:20]}"
+        token = client.post("/auth/register", json={"username": username, "password": "test-password"}).json()["access_token"]
+        return username, token
+
+    admin_name, admin_token = register("review-a")
+    member_name, member_token = register("review-m")
+    admin_headers = {"Authorization": f"Bearer {admin_token}"}
+    member_headers = {"Authorization": f"Bearer {member_token}"}
+    group_id = client.post("/groups", headers=admin_headers, json={"name": "Review team"}).json()["id"]
+    client.post(f"/groups/{group_id}/members", headers=admin_headers, json={"username": member_name, "role": "member"})
+
+    created = client.post(
+        "/tasks",
+        headers=admin_headers,
+        json={"title": "Daily check", "group_id": group_id, "assignee_username": member_name, "task_type": "daily", "points": 15},
+    ).json()
+    assert created["task_status"] == "pending"
+    assert client.post(f"/tasks/{created['id']}/complete", headers=member_headers).json()["status"] == "submitted"
+    assert client.post(f"/tasks/{created['id']}/approve", headers=admin_headers).json()["status"] == "approved"
+
+    member = client.get("/auth/me", headers=member_headers).json()
+    tasks = client.get("/tasks", headers=member_headers).json()
+    assert member["points_balance"] == 15
+    assert tasks[0]["task_status"] == "approved"
+    assert tasks[0]["task_type"] == "daily"

@@ -18,7 +18,7 @@ from jwt import InvalidTokenError, decode, encode
 from pwdlib import PasswordHash
 from pydantic import BaseModel, ConfigDict, Field
 from prometheus_fastapi_instrumentator import Instrumentator
-from sqlalchemy import DateTime, ForeignKey, String, create_engine, select
+from sqlalchemy import DateTime, ForeignKey, Integer, String, create_engine, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 
@@ -52,6 +52,12 @@ class Task(Base):
     reminder_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     group_id: Mapped[int | None] = mapped_column(ForeignKey("groups.id"), nullable=True, index=True)
     assignee_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    task_type: Mapped[str] = mapped_column(String(16), default="once", nullable=False)
+    task_status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False, index=True)
+    points: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    next_occurrence_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    points_awarded: Mapped[bool] = mapped_column(default=False, nullable=False)
 
 
 class Group(Base):
@@ -81,6 +87,7 @@ class User(Base):
     is_server_admin: Mapped[bool] = mapped_column(default=False, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    points_balance: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 
 class GoogleIdentity(Base):
@@ -97,12 +104,18 @@ class TaskCreate(BaseModel):
     reminder_at: datetime | None = None
     group_id: int | None = None
     assignee_username: str | None = Field(default=None, max_length=32)
+    task_type: str = Field(default="once", pattern="^(once|daily|weekly)$")
+    points: int = Field(default=0, ge=0, le=100000)
 
 
 class TaskRead(TaskCreate):
     model_config = ConfigDict(from_attributes=True)
     id: int
     created_at: datetime
+    task_status: str
+    assignee_id: int | None = None
+    approved_at: datetime | None = None
+    next_occurrence_at: datetime | None = None
 
 
 class Credentials(BaseModel):
@@ -123,6 +136,7 @@ class GoogleAuthStatus(BaseModel):
 class UserProfile(BaseModel):
     username: str
     is_server_admin: bool
+    points_balance: int
 
 
 class PairingInfo(BaseModel):
@@ -202,8 +216,15 @@ def create_tables() -> None:
             connection.exec_driver_sql("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS reminder_at TIMESTAMP")
             connection.exec_driver_sql("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS group_id INTEGER")
             connection.exec_driver_sql("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assignee_id INTEGER")
+            connection.exec_driver_sql("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS task_type VARCHAR(16) NOT NULL DEFAULT 'once'")
+            connection.exec_driver_sql("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS task_status VARCHAR(16) NOT NULL DEFAULT 'pending'")
+            connection.exec_driver_sql("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS points INTEGER NOT NULL DEFAULT 0")
+            connection.exec_driver_sql("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP")
+            connection.exec_driver_sql("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS next_occurrence_at TIMESTAMP")
+            connection.exec_driver_sql("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS points_awarded BOOLEAN NOT NULL DEFAULT FALSE")
             connection.exec_driver_sql("ALTER TABLE users ADD COLUMN IF NOT EXISTS username VARCHAR(32)")
             connection.exec_driver_sql("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_server_admin BOOLEAN NOT NULL DEFAULT FALSE")
+            connection.exec_driver_sql("ALTER TABLE users ADD COLUMN IF NOT EXISTS points_balance INTEGER NOT NULL DEFAULT 0")
             connection.exec_driver_sql("UPDATE users SET username = CONCAT('user-', id) WHERE username IS NULL")
             connection.exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_username ON users (username)")
 
@@ -272,6 +293,26 @@ def membership_for(session: Session, group_id: int, user_id: int) -> Membership:
     if membership is None:
         raise HTTPException(status_code=403, detail="You are not a member of this group")
     return membership
+
+
+def refresh_recurring_tasks(session: Session) -> None:
+    """Make an approved recurring task available again when its next cycle starts."""
+    now = datetime.utcnow()
+    tasks = session.scalars(
+        select(Task).where(
+            Task.task_type.in_(("daily", "weekly")),
+            Task.task_status == "approved",
+            Task.next_occurrence_at.is_not(None),
+            Task.next_occurrence_at <= now,
+        )
+    ).all()
+    for task in tasks:
+        task.task_status = "pending"
+        task.approved_at = None
+        task.next_occurrence_at = None
+        task.points_awarded = False
+    if tasks:
+        session.commit()
 
 
 @app.get("/health")
@@ -446,7 +487,11 @@ def google_auth_session(request: FastAPIRequest) -> AccessToken:
 
 @app.get("/auth/me", response_model=UserProfile)
 def me(user: User = Depends(current_user)) -> UserProfile:
-    return UserProfile(username=user.username or f"user-{user.id}", is_server_admin=user.is_server_admin)
+    return UserProfile(
+        username=user.username or f"user-{user.id}",
+        is_server_admin=user.is_server_admin,
+        points_balance=user.points_balance,
+    )
 
 
 @app.post("/groups", response_model=GroupRead, status_code=status.HTTP_201_CREATED)
@@ -525,9 +570,63 @@ def create_task(payload: TaskCreate, user: User = Depends(current_user)) -> Task
         return task
 
 
+@app.post("/tasks/{task_id}/complete")
+def submit_task_completion(task_id: int, user: User = Depends(current_user)) -> dict[str, str]:
+    """The assignee confirms that the work is finished (blue -> yellow)."""
+    with Session(engine) as session:
+        task = session.get(Task, task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        if task.assignee_id != user.id:
+            raise HTTPException(status_code=403, detail="Only the assigned participant can mark this task as complete")
+        if task.task_status != "pending":
+            raise HTTPException(status_code=409, detail="This task has already been submitted or approved")
+        task.task_status = "submitted"
+        session.commit()
+        return {"status": "submitted"}
+
+
+def can_approve_task(session: Session, task: Task, user: User) -> bool:
+    if user.is_server_admin:
+        return True
+    if task.group_id is None:
+        return task.owner_id == user.id
+    return membership_for(session, task.group_id, user.id).role == "admin"
+
+
+@app.post("/tasks/{task_id}/approve")
+def approve_task_completion(task_id: int, user: User = Depends(current_user)) -> dict[str, str]:
+    """An administrator verifies the work (yellow -> green) and awards points."""
+    with Session(engine) as session:
+        task = session.get(Task, task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        if task.task_status != "submitted":
+            raise HTTPException(status_code=409, detail="Only a submitted task can be approved")
+        if not can_approve_task(session, task, user):
+            raise HTTPException(status_code=403, detail="Only an administrator can approve this task")
+
+        if not task.points_awarded and task.assignee_id is not None:
+            assignee = session.get(User, task.assignee_id)
+            if assignee is not None:
+                assignee.points_balance += task.points
+            task.points_awarded = True
+
+        task.task_status = "approved"
+        task.approved_at = datetime.utcnow()
+        if task.task_type == "once":
+            session.delete(task)
+        else:
+            interval = timedelta(days=1 if task.task_type == "daily" else 7)
+            task.next_occurrence_at = datetime.utcnow() + interval
+        session.commit()
+        return {"status": "approved"}
+
+
 @app.get("/tasks", response_model=list[TaskRead])
 def list_tasks(user: User = Depends(current_user)) -> list[Task]:
     with Session(engine) as session:
+        refresh_recurring_tasks(session)
         groups = session.scalars(select(Membership.group_id).where(Membership.user_id == user.id)).all()
         return list(session.scalars(select(Task).where((Task.owner_id == user.id) | (Task.group_id.in_(groups))).order_by(Task.id.desc())))
 
