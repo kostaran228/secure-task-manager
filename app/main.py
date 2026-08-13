@@ -57,7 +57,7 @@ class Task(Base):
     assignee_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     task_type: Mapped[str] = mapped_column(String(16), default="once", nullable=False)
     task_status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False, index=True)
-    points: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    points: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     next_occurrence_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     points_awarded: Mapped[bool] = mapped_column(default=False, nullable=False)
@@ -111,7 +111,7 @@ class TaskCreate(BaseModel):
     assignee_username: str | None = Field(default=None, max_length=32)
     assignee_usernames: list[str] = Field(default_factory=list, max_length=100)
     task_type: str = Field(default="once", pattern="^(once|daily|weekly)$")
-    points: int = Field(default=0, ge=0, le=100000)
+    points: int = Field(default=1, ge=0, le=100000)
 
 
 class TaskRead(TaskCreate):
@@ -308,6 +308,7 @@ def local_ai_task_command(text: str, usernames: list[str], tasks: list[Task], as
             "Для update_title: {\"action\":\"update_title\",\"task_id\":12,\"title\":\"...\"}. "
             "Для update_description: {\"action\":\"update_description\",\"task_id\":12,\"description\":\"...\"}. "
             "Для assign: {\"action\":\"assign\",\"task_id\":12,\"assignees\":[\"точное_имя\"]}. "
+            "Если фраза содержит «баллы» или «награда» и говорит о существующей задаче, это всегда update_points именно для этой задачи. "
             "Для update_points: {\"action\":\"update_points\",\"task_id\":12,\"points\":5}. "
             "Для complete, approve или delete укажи task_ids — массив номеров, можно несколько. Для list других полей не нужно. "
             "Если задача названа словами, найди её по title, description или assignee в списке и верни её номер. "
@@ -347,7 +348,7 @@ def local_ai_task_command(text: str, usernames: list[str], tasks: list[Task], as
         assignees = [str(name).casefold() for name in decoded.get("assignees", []) if str(name).casefold() in allowed]
         task_type = decoded.get("task_type") if decoded.get("task_type") in {"once", "daily", "weekly"} else "once"
         try:
-            points = max(0, min(100000, int(decoded.get("points", 0))))
+            points = max(1, min(100000, int(decoded.get("points", 1))))
         except (TypeError, ValueError):
             points = 0
         canonical = f"создай задачу {task_type} {decoded['title'].strip()} на {points} баллов"
@@ -384,6 +385,34 @@ def infer_referenced_task_command(text: str, tasks: list[Task], assignee_names: 
     if len(selected) != requested_count or (not owner and not words):
         return None
     return "delete " + ",".join(str(task.id) for task in selected)
+
+
+def infer_reward_command(text: str, tasks: list[Task], assignee_names: dict[int, str]) -> str | None:
+    """Set a reward from natural wording when a lightweight model misses the JSON action."""
+    lower = text.casefold()
+    if not any(word in lower for word in ("балл", "баллы", "баллов", "награда", "награду")):
+        return None
+    match = re.search(r"(?:на\s+|в\s+|по\s+)?(\d+)\s+балл", lower)
+    if not match:
+        match = re.search(r"(?:баллы|баллов|награду|награда)\s+(?:на\s+|в\s+)?(\d+)", lower)
+    if not match:
+        return None
+    points = max(0, min(100000, int(match.group(1))))
+    stop_words = {"балл", "баллы", "баллов", "награда", "награду", "поставь", "поставить", "измени", "изменить", "за", "задачу", "задачи", "для", "на", "в", "у", "и", "это", "этой", "этого"}
+    words = {word for word in re.findall(r"[\w-]{3,}", lower, flags=re.UNICODE) if word not in stop_words and not word.isdigit()}
+    ranked: list[tuple[int, Task]] = []
+    for task in tasks:
+        task_words = set(re.findall(r"[\w-]{3,}", f"{task.title} {task.description or ''}".casefold(), flags=re.UNICODE))
+        score = len(words & task_words) * 5
+        if score:
+            ranked.append((score, task))
+    ranked.sort(key=lambda item: (-item[0], -item[1].id))
+    if not ranked:
+        task_id_match = re.search(r"(?:задач[ауе]?\s*#?)(\d+)", lower)
+        if task_id_match and any(task.id == int(task_id_match.group(1)) for task in tasks):
+            return f"update_points {int(task_id_match.group(1))} {points}"
+        return None
+    return f"update_points {ranked[0][1].id} {points}"
 
 
 def assistant_action(session: Session, user: User, text: str) -> tuple[str | None, int | None, str | None]:
@@ -480,7 +509,7 @@ def assistant_action(session: Session, user: User, text: str) -> tuple[str | Non
         split = re.split(r"\s+(?:для|участнику|участникам)\s+", remainder, maxsplit=1, flags=re.IGNORECASE)
         title = split[0].strip(" .,!?:;")
         points_match = re.search(r"\s+на\s+(\d+)\s+балл(?:а|ов)?\b", title, flags=re.IGNORECASE)
-        points = int(points_match.group(1)) if points_match else 0
+        points = max(1, int(points_match.group(1))) if points_match else 1
         if points_match:
             title = (title[:points_match.start()] + title[points_match.end():]).strip(" .,!?:;")
         task_type = "daily" if re.search(r"\b(ежедневн\w*|daily)\b", title, re.IGNORECASE) else "weekly" if re.search(r"\b(еженедельн\w*|weekly)\b", title, re.IGNORECASE) else "once"
@@ -948,6 +977,10 @@ def run_assistant_command(payload: AssistantCommand, user: User = Depends(curren
                 fallback_command = infer_referenced_task_command(payload.text, visible_tasks, assignee_names)
                 if fallback_command:
                     action, task_id, reply = assistant_action(session, user, fallback_command)
+            if reply is None:
+                reward_command = infer_reward_command(payload.text, visible_tasks, assignee_names)
+                if reward_command:
+                    action, task_id, reply = assistant_action(session, user, reward_command)
     if reply:
         return AssistantReply(reply=reply, action=action, task_id=task_id)
     if any(word in payload.text.casefold() for word in ("удали", "удалить", "измени", "переименуй", "назнач", "создай", "поставь", "выполни", "подтверди")):
