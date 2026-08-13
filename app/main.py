@@ -293,6 +293,41 @@ def local_ai_reply(text: str) -> str:
         return "Локальный ИИ сейчас недоступен. Проверьте, что Ollama и выбранная модель запущены у администратора."
 
 
+def local_ai_task_command(text: str, usernames: list[str]) -> str | None:
+    """Use the local model only to turn a natural phrase into a constrained task command."""
+    try:
+        with urlopen(f"{OLLAMA_BASE_URL}/api/tags", timeout=2) as response:
+            installed = [item.get("name", "") for item in json.load(response).get("models", [])]
+        model = OLLAMA_MODEL if OLLAMA_MODEL in installed else next((name for name in installed if name.startswith("qwen3:")), None)
+        if not model:
+            return None
+        prompt = (
+            "Ты переводишь голосовую фразу в JSON для менеджера задач. Никаких пояснений и Markdown. "
+            "Если пользователь явно просит создать или назначить задачу, верни только JSON вида "
+            '{"action":"create","title":"короткое название","assignees":["точное_имя"],"task_type":"once|daily|weekly","points":0}. '
+            "Если это не просьба создать/назначить задачу, верни только {\"action\":\"none\"}. "
+            f"Допустимые имена участников: {', '.join(usernames) or 'нет'}. "
+            f"Фраза: {text}"
+        )
+        payload = json.dumps({"model": model, "prompt": prompt, "stream": False, "format": "json", "options": {"temperature": 0}}).encode()
+        request = Request(f"{OLLAMA_BASE_URL}/api/generate", data=payload, headers={"Content-Type": "application/json"})
+        with urlopen(request, timeout=60) as response:
+            decoded = json.loads(str(json.load(response).get("response", "{}")))
+        if decoded.get("action") != "create" or not isinstance(decoded.get("title"), str) or not decoded["title"].strip():
+            return None
+        allowed = {name.casefold() for name in usernames}
+        assignees = [str(name).casefold() for name in decoded.get("assignees", []) if str(name).casefold() in allowed]
+        task_type = decoded.get("task_type") if decoded.get("task_type") in {"once", "daily", "weekly"} else "once"
+        try:
+            points = max(0, min(100000, int(decoded.get("points", 0))))
+        except (TypeError, ValueError):
+            points = 0
+        canonical = f"создай задачу {task_type} {decoded['title'].strip()} на {points} баллов"
+        return canonical + (f" для {' и '.join(assignees)}" if assignees else "")
+    except (HTTPError, URLError, TimeoutError, ValueError, json.JSONDecodeError):
+        return None
+
+
 def assistant_action(session: Session, user: User, text: str) -> tuple[str | None, int | None, str | None]:
     """Safe Russian task commands. The language model never receives direct DB access."""
     command = " ".join(text.strip().split())
@@ -307,8 +342,8 @@ def assistant_action(session: Session, user: User, text: str) -> tuple[str | Non
         points = int(points_match.group(1)) if points_match else 0
         if points_match:
             title = (title[:points_match.start()] + title[points_match.end():]).strip(" .,!?:;")
-        task_type = "daily" if re.search(r"\bежедневн\w*\b", title, re.IGNORECASE) else "weekly" if re.search(r"\bеженедельн\w*\b", title, re.IGNORECASE) else "once"
-        title = re.sub(r"\b(ежедневн\w*|еженедельн\w*)\b", "", title, flags=re.IGNORECASE).strip(" .,!?:;")
+        task_type = "daily" if re.search(r"\b(ежедневн\w*|daily)\b", title, re.IGNORECASE) else "weekly" if re.search(r"\b(еженедельн\w*|weekly)\b", title, re.IGNORECASE) else "once"
+        title = re.sub(r"\b(ежедневн\w*|еженедельн\w*|daily|weekly|once)\b", "", title, flags=re.IGNORECASE).strip(" .,!?:;")
         if not title:
             return None, None, "После команды назовите задачу, например: «Помощник, назначь задачу купить продукты для alex»."
         assignees = [user]
@@ -736,6 +771,11 @@ def run_assistant_command(payload: AssistantCommand, user: User = Depends(curren
     """Run a voice/text command through the local assistant with a safe task-action allowlist."""
     with Session(engine) as session:
         action, task_id, reply = assistant_action(session, user, payload.text)
+        if reply is None:
+            usernames = [name for name in session.scalars(select(User.username)).all() if name]
+            generated_command = local_ai_task_command(payload.text, usernames)
+            if generated_command:
+                action, task_id, reply = assistant_action(session, user, generated_command)
     if reply:
         return AssistantReply(reply=reply, action=action, task_id=task_id)
     return AssistantReply(reply=local_ai_reply(payload.text))
