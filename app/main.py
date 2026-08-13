@@ -293,7 +293,7 @@ def local_ai_reply(text: str) -> str:
         return "Локальный ИИ сейчас недоступен. Проверьте, что Ollama и выбранная модель запущены у администратора."
 
 
-def local_ai_task_command(text: str, usernames: list[str]) -> str | None:
+def local_ai_task_command(text: str, usernames: list[str], tasks: list[Task], assignee_names: dict[int, str]) -> str | None:
     """Use the local model only to turn a natural phrase into a constrained task command."""
     try:
         with urlopen(f"{OLLAMA_BASE_URL}/api/tags", timeout=2) as response:
@@ -308,9 +308,12 @@ def local_ai_task_command(text: str, usernames: list[str]) -> str | None:
             "Для update_title: {\"action\":\"update_title\",\"task_id\":12,\"title\":\"...\"}. "
             "Для update_description: {\"action\":\"update_description\",\"task_id\":12,\"description\":\"...\"}. "
             "Для assign: {\"action\":\"assign\",\"task_id\":12,\"assignees\":[\"точное_имя\"]}. "
-            "Для complete, approve или delete укажи task_id. Для list других полей не нужно. "
-            "Если намерение неясно, верни только {\"action\":\"none\"}. "
+            "Для update_points: {\"action\":\"update_points\",\"task_id\":12,\"points\":5}. "
+            "Для complete, approve или delete укажи task_ids — массив номеров, можно несколько. Для list других полей не нужно. "
+            "Если задача названа словами, найди её по title, description или assignee в списке и верни её номер. "
+            "Если намерение неясно, верни только {\"action\":\"none\"}. Никогда не объясняй, как нажимать кнопки. "
             f"Допустимые имена участников: {', '.join(usernames) or 'нет'}. "
+            f"Текущие задачи, по которым можно выполнять действия: {json.dumps([{'id': task.id, 'title': task.title, 'description': task.description or '', 'assignee': assignee_names.get(task.assignee_id or -1, ''), 'points': task.points, 'status': task.task_status} for task in tasks], ensure_ascii=False)}. "
             f"Фраза: {text}"
         )
         payload = json.dumps({"model": model, "prompt": prompt, "stream": False, "format": "json", "options": {"temperature": 0}}).encode()
@@ -319,8 +322,9 @@ def local_ai_task_command(text: str, usernames: list[str]) -> str | None:
             decoded = json.loads(str(json.load(response).get("response", "{}")))
         action = decoded.get("action")
         if action in {"complete", "approve", "delete", "list"}:
-            task_id = decoded.get("task_id")
-            return f"{action} {int(task_id)}" if action != "list" and isinstance(task_id, int) else ("list" if action == "list" else None)
+            task_ids = decoded.get("task_ids", [decoded.get("task_id")])
+            valid_ids = [str(int(task_id)) for task_id in task_ids if isinstance(task_id, int)] if isinstance(task_ids, list) else []
+            return f"{action} {','.join(valid_ids)}" if action != "list" and valid_ids else ("list" if action == "list" else None)
         if action in {"update_title", "update_description"}:
             task_id = decoded.get("task_id")
             field = "title" if action == "update_title" else "description"
@@ -330,6 +334,13 @@ def local_ai_task_command(text: str, usernames: list[str]) -> str | None:
             task_id = decoded.get("task_id")
             assignees = [str(name).casefold() for name in decoded.get("assignees", []) if str(name).casefold() in {name.casefold() for name in usernames}]
             return f"assign {int(task_id)} {' и '.join(assignees)}" if isinstance(task_id, int) and assignees else None
+        if action == "update_points":
+            task_id = decoded.get("task_id")
+            try:
+                points = max(0, min(100000, int(decoded.get("points"))))
+            except (TypeError, ValueError):
+                return None
+            return f"update_points {int(task_id)} {points}" if isinstance(task_id, int) else None
         if action != "create" or not isinstance(decoded.get("title"), str) or not decoded["title"].strip():
             return None
         allowed = {name.casefold() for name in usernames}
@@ -386,6 +397,17 @@ def assistant_action(session: Session, user: User, text: str) -> tuple[str | Non
         task.description = description[:1000]
         session.commit()
         return "updated", task.id, "Описание задачи обновлено."
+
+    update_points = re.match(r"^(?:измени\s+)?(?:баллы|награду)\s+(?:за\s+)?задачу\s+(\d+)\s+(?:на|в)\s+(\d+)$", command, re.IGNORECASE)
+    generated_points = re.match(r"^update_points\s+(\d+)\s+(\d+)$", command, re.IGNORECASE)
+    match = update_points or generated_points
+    if match:
+        task = task_by_id(match.group(1))
+        if task is None or not can_manage(task):
+            return None, None, "Не могу изменить баллы этой задачи: она не найдена или у вас недостаточно прав."
+        task.points = min(100000, int(match.group(2)))
+        session.commit()
+        return "updated", task.id, f"Для задачи «{task.title}» установлено {task.points} баллов."
 
     assign_existing = re.match(r"^(?:назначь|назначить|поставь)\s+задачу\s+(\d+)\s+для\s+(.+)$", command, re.IGNORECASE)
     generated_assign = re.match(r"^assign\s+(\d+)\s+(.+)$", command, re.IGNORECASE)
@@ -507,16 +529,16 @@ def assistant_action(session: Session, user: User, text: str) -> tuple[str | Non
                 return "approved", task.id, f"Подтвердил выполнение задачи «{task.title}»."
             return None, None, "Подтверждать можно только жёлтые задачи и только администратору сервера."
     if lower.startswith("удали задачу ") or lower.startswith("delete "):
-        number = re.search(r"(\d+)", lower).group(1) if re.search(r"(\d+)", lower) else ""
-        if number.isdigit():
-            task = session.get(Task, int(number))
-            allowed = task and (user.is_server_admin or (task.group_id is None and task.owner_id == user.id))
-            if allowed:
-                title = task.title
+        numbers = [int(number) for number in re.findall(r"\d+", lower)]
+        if numbers:
+            tasks = [session.get(Task, number) for number in numbers]
+            if any(task is None or not can_manage(task) for task in tasks):
+                return None, None, "Не могу удалить все указанные задачи: часть не найдена или у вас недостаточно прав."
+            titles = [task.title for task in tasks if task]
+            for task in tasks:
                 session.delete(task)
-                session.commit()
-                return "deleted", int(number), f"Удалил задачу «{title}»."
-            return None, None, "Эту задачу нельзя удалить с вашими текущими правами."
+            session.commit()
+            return "deleted", numbers[0], f"Удалил задачи: {', '.join('«' + title + '»' for title in titles)}."
     return None, None, None
 
 
@@ -883,7 +905,13 @@ def run_assistant_command(payload: AssistantCommand, user: User = Depends(curren
         action, task_id, reply = assistant_action(session, user, payload.text)
         if reply is None:
             usernames = [name for name in session.scalars(select(User.username)).all() if name]
-            generated_command = local_ai_task_command(payload.text, usernames)
+            if user.is_server_admin:
+                visible_tasks = session.scalars(select(Task).order_by(Task.id.desc())).all()
+            else:
+                group_ids = session.scalars(select(Membership.group_id).where(Membership.user_id == user.id)).all()
+                visible_tasks = session.scalars(select(Task).where((Task.owner_id == user.id) | (Task.group_id.in_(group_ids))).order_by(Task.id.desc())).all()
+            assignee_names = {user_id: username for user_id, username in session.execute(select(User.id, User.username)).all() if username}
+            generated_command = local_ai_task_command(payload.text, usernames, visible_tasks, assignee_names)
             if generated_command:
                 action, task_id, reply = assistant_action(session, user, generated_command)
     if reply:
