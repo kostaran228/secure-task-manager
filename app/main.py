@@ -158,6 +158,15 @@ class GroupRead(BaseModel):
     role: str
 
 
+class GroupMemberRead(BaseModel):
+    username: str
+    role: str
+
+
+class RegisteredUserRead(BaseModel):
+    username: str
+
+
 is_production = os.getenv("APP_ENV") == "production"
 app = FastAPI(
     title="Secure Task Manager",
@@ -304,6 +313,13 @@ def claim_server(user: User = Depends(current_user)) -> dict[str, str]:
 @app.get("/admin/status", response_model=AdminStatus)
 def admin_status(_: User = Depends(server_admin)) -> AdminStatus:
     return AdminStatus(server_url=SERVER_URL, pairing_code=PAIRING_CODE)
+
+
+@app.get("/admin/users", response_model=list[RegisteredUserRead])
+def registered_users(_: User = Depends(server_admin)) -> list[RegisteredUserRead]:
+    with Session(engine) as session:
+        users = session.scalars(select(User).where(User.username.is_not(None)).order_by(User.created_at.desc())).all()
+        return [RegisteredUserRead(username=user.username or f"user-{user.id}") for user in users]
 
 
 @app.get("/admin/pairing/qr.svg", include_in_schema=False)
@@ -458,6 +474,19 @@ def add_member(group_id: int, payload: MemberAdd, user: User = Depends(current_u
             session.add(Membership(group_id=group_id, user_id=target.id, role=payload.role))
         session.commit()
         return {"status": "member updated"}
+
+
+@app.get("/groups/{group_id}/members", response_model=list[GroupMemberRead])
+def list_group_members(group_id: int, user: User = Depends(current_user)) -> list[GroupMemberRead]:
+    with Session(engine) as session:
+        membership_for(session, group_id, user.id)
+        rows = session.execute(
+            select(User.username, Membership.role)
+            .join(Membership, Membership.user_id == User.id)
+            .where(Membership.group_id == group_id)
+            .order_by(User.username)
+        ).all()
+        return [GroupMemberRead(username=username or "unknown", role=role) for username, role in rows]
 
 
 @app.post("/tasks", response_model=TaskRead, status_code=status.HTTP_201_CREATED)

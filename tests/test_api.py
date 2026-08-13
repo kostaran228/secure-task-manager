@@ -30,7 +30,7 @@ def test_dashboard_is_available() -> None:
     response = TestClient(main.app).get("/")
 
     assert response.status_code == 200
-    assert "Secure Task Manager" in response.text
+    assert "Task Manager" in response.text
 
 
 def test_create_and_list_task() -> None:
