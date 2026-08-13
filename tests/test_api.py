@@ -141,6 +141,9 @@ def test_task_confirmation_awards_points_and_recurring_task_returns() -> None:
 
     admin_name, admin_token = register("review-a")
     member_name, member_token = register("review-m")
+    with main.Session(main.engine) as session:
+        session.get(main.User, int(main.decode(admin_token, main.jwt_secret(), algorithms=[main.TOKEN_ALGORITHM])["sub"])).is_server_admin = True
+        session.commit()
     admin_headers = {"Authorization": f"Bearer {admin_token}"}
     member_headers = {"Authorization": f"Bearer {member_token}"}
     group_id = client.post("/groups", headers=admin_headers, json={"name": "Review team"}).json()["id"]
@@ -160,3 +163,27 @@ def test_task_confirmation_awards_points_and_recurring_task_returns() -> None:
     assert member["points_balance"] == 15
     assert tasks[0]["task_status"] == "approved"
     assert tasks[0]["task_type"] == "daily"
+
+
+def test_only_server_admin_sees_private_tasks_and_can_approve() -> None:
+    client = TestClient(main.app)
+
+    def register(prefix: str) -> tuple[str, str]:
+        username = f"{prefix}-{uuid4().hex[:20]}"
+        token = client.post("/auth/register", json={"username": username, "password": "test-password"}).json()["access_token"]
+        return username, token
+
+    owner_name, owner_token = register("own")
+    server_name, server_token = register("srv")
+    server_id = int(main.decode(server_token, main.jwt_secret(), algorithms=[main.TOKEN_ALGORITHM])["sub"])
+    with main.Session(main.engine) as session:
+        session.get(main.User, server_id).is_server_admin = True
+        session.commit()
+    owner_headers = {"Authorization": f"Bearer {owner_token}"}
+    server_headers = {"Authorization": f"Bearer {server_token}"}
+    task_id = client.post("/tasks", headers=owner_headers, json={"title": "Private job", "points": 7}).json()["id"]
+    assert any(task["id"] == task_id for task in client.get("/tasks", headers=server_headers).json())
+    assert client.post(f"/tasks/{task_id}/complete", headers=owner_headers).status_code == 200
+    assert client.post(f"/tasks/{task_id}/approve", headers=owner_headers).status_code == 403
+    assert client.post(f"/tasks/{task_id}/approve", headers=server_headers).status_code == 200
+    assert client.get("/auth/me", headers=owner_headers).json()["points_balance"] == 7

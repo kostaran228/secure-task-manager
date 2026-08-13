@@ -650,25 +650,17 @@ def submit_task_completion(task_id: int, user: User = Depends(current_user)) -> 
         return {"status": "submitted"}
 
 
-def can_approve_task(session: Session, task: Task, user: User) -> bool:
-    if user.is_server_admin:
-        return True
-    if task.group_id is None:
-        return task.owner_id == user.id
-    return membership_for(session, task.group_id, user.id).role == "admin"
-
-
 @app.post("/tasks/{task_id}/approve")
 def approve_task_completion(task_id: int, user: User = Depends(current_user)) -> dict[str, str]:
-    """An administrator verifies the work (yellow -> green) and awards points."""
+    """Only the server administrator verifies work and awards points."""
     with Session(engine) as session:
         task = session.get(Task, task_id)
         if task is None:
             raise HTTPException(status_code=404, detail="Task not found")
         if task.task_status != "submitted":
             raise HTTPException(status_code=409, detail="Only a submitted task can be approved")
-        if not can_approve_task(session, task, user):
-            raise HTTPException(status_code=403, detail="Only an administrator can approve this task")
+        if not user.is_server_admin:
+            raise HTTPException(status_code=403, detail="Only the server administrator can approve this task")
 
         if not task.points_awarded and task.assignee_id is not None:
             assignee = session.get(User, task.assignee_id)
@@ -684,7 +676,7 @@ def approve_task_completion(task_id: int, user: User = Depends(current_user)) ->
             interval = timedelta(days=1 if task.task_type == "daily" else 7)
             task.next_occurrence_at = datetime.utcnow() + interval
         session.commit()
-        return {"status": "approved"}
+        return {"status": "approved", "points_awarded": str(task.points)}
 
 
 @app.delete("/tasks/{task_id}")
@@ -709,8 +701,11 @@ def delete_task(task_id: int, user: User = Depends(current_user)) -> dict[str, s
 def list_tasks(user: User = Depends(current_user)) -> list[TaskRead]:
     with Session(engine) as session:
         refresh_recurring_tasks(session)
-        groups = session.scalars(select(Membership.group_id).where(Membership.user_id == user.id)).all()
-        tasks = session.scalars(select(Task).where((Task.owner_id == user.id) | (Task.group_id.in_(groups))).order_by(Task.id.desc())).all()
+        if user.is_server_admin:
+            tasks = session.scalars(select(Task).order_by(Task.id.desc())).all()
+        else:
+            groups = session.scalars(select(Membership.group_id).where(Membership.user_id == user.id)).all()
+            tasks = session.scalars(select(Task).where((Task.owner_id == user.id) | (Task.group_id.in_(groups))).order_by(Task.id.desc())).all()
         return [task_read(session, task) for task in tasks]
 
 
@@ -720,7 +715,7 @@ def get_task(task_id: int, user: User = Depends(current_user)) -> TaskRead:
         task = session.get(Task, task_id)
         if task is None:
             raise HTTPException(status_code=404, detail="Task not found")
-        if task.group_id is None and task.owner_id != user.id:
+        if task.group_id is None and task.owner_id != user.id and not user.is_server_admin:
             raise HTTPException(status_code=404, detail="Task not found")
         if task.group_id is not None:
             membership_for(session, task.group_id, user.id)
