@@ -85,7 +85,7 @@ class DesktopServerApi:
         if process.stdout is None:
             return
         for line in process.stdout:
-            match = re.search(r"https://[-a-z0-9]+\\.trycloudflare\\.com", line, re.I)
+            match = re.search(r"https://[-a-z0-9]+\.trycloudflare\.com", line, re.I)
             if match:
                 DesktopServerApi.tunnel_url = match.group(0)
                 DesktopServerApi._save_tunnel(process, DesktopServerApi.tunnel_url)
