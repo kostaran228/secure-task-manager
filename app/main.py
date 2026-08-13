@@ -1,6 +1,7 @@
 import os
 import secrets
 import json
+import re
 from base64 import urlsafe_b64encode
 from io import BytesIO
 from datetime import datetime, timedelta, timezone
@@ -293,19 +294,64 @@ def local_ai_reply(text: str) -> str:
 
 
 def assistant_action(session: Session, user: User, text: str) -> tuple[str | None, int | None, str | None]:
-    """Small, auditable command set. The language model never receives direct DB access."""
+    """Safe Russian task commands. The language model never receives direct DB access."""
     command = " ".join(text.strip().split())
     lower = command.casefold()
-    for prefix in ("создай задачу ", "добавь задачу "):
-        if lower.startswith(prefix):
-            title = command[len(prefix):].strip(" .,!?:;")
-            if not title:
-                return None, None, "После команды назовите задачу, например: «Помощник, создай задачу купить продукты»."
-            task = Task(title=title[:200], owner_id=user.id, assignee_id=user.id, task_type="once", points=0)
-            session.add(task)
-            session.commit()
-            session.refresh(task)
-            return "created", task.id, f"Создал задачу: «{task.title}»."
+    create_prefixes = ("создай задачу ", "добавь задачу ", "назначь задачу ", "назначить задачу ", "поставь задачу ")
+    prefix = next((item for item in create_prefixes if lower.startswith(item)), None)
+    if prefix:
+        remainder = command[len(prefix):].strip(" .,!?:;")
+        split = re.split(r"\s+(?:для|участнику|участникам)\s+", remainder, maxsplit=1, flags=re.IGNORECASE)
+        title = split[0].strip(" .,!?:;")
+        points_match = re.search(r"\s+на\s+(\d+)\s+балл(?:а|ов)?\b", title, flags=re.IGNORECASE)
+        points = int(points_match.group(1)) if points_match else 0
+        if points_match:
+            title = (title[:points_match.start()] + title[points_match.end():]).strip(" .,!?:;")
+        task_type = "daily" if re.search(r"\bежедневн\w*\b", title, re.IGNORECASE) else "weekly" if re.search(r"\bеженедельн\w*\b", title, re.IGNORECASE) else "once"
+        title = re.sub(r"\b(ежедневн\w*|еженедельн\w*)\b", "", title, flags=re.IGNORECASE).strip(" .,!?:;")
+        if not title:
+            return None, None, "После команды назовите задачу, например: «Помощник, назначь задачу купить продукты для alex»."
+        assignees = [user]
+        group_id = None
+        if len(split) == 2:
+            requested_names = [name.strip().casefold() for name in re.split(r"\s*(?:,|\s+и\s+)\s*", split[1]) if name.strip()]
+            targets = []
+            for name in requested_names:
+                target = session.scalar(select(User).where(User.username == name))
+                if target is None:
+                    return None, None, f"Участник «{name}» не найден. Используйте его точное имя из списка команды."
+                targets.append(target)
+            if not targets:
+                return None, None, "Укажите хотя бы одного участника после слова «для»."
+            target_group_sets = []
+            for target in targets:
+                memberships = session.scalars(select(Membership).where(Membership.user_id == target.id)).all()
+                target_group_sets.append({membership.group_id for membership in memberships})
+            common_groups = set.intersection(*target_group_sets) if target_group_sets else set()
+            if not user.is_server_admin:
+                actor_memberships = session.scalars(select(Membership).where(Membership.user_id == user.id)).all()
+                actor_by_group = {membership.group_id: membership for membership in actor_memberships}
+                common_groups &= set(actor_by_group)
+                allowed_groups = []
+                for candidate_group in common_groups:
+                    actor_membership = actor_by_group[candidate_group]
+                    if actor_membership.role == "member":
+                        continue
+                    target_memberships = [session.scalar(select(Membership).where(Membership.group_id == candidate_group, Membership.user_id == target.id)) for target in targets]
+                    if all(membership and membership.priority < actor_membership.priority for membership in target_memberships):
+                        allowed_groups.append(candidate_group)
+                common_groups = set(allowed_groups)
+            if not common_groups:
+                return None, None, "Не могу назначить задачу: участники должны быть в одной команде и иметь приоритет ниже вашего."
+            group_id = min(common_groups)
+            assignees = targets
+        tasks = [Task(title=title[:200], owner_id=user.id, assignee_id=assignee.id, group_id=group_id, task_type=task_type, points=points) for assignee in assignees]
+        session.add_all(tasks)
+        session.commit()
+        session.refresh(tasks[0])
+        names = ", ".join(assignee.username or "участник" for assignee in assignees)
+        destination = f" для {names}" if group_id is not None else ""
+        return "created", tasks[0].id, f"Создал задачу «{tasks[0].title}»{destination}. Баллы: {points}."
     if lower.startswith("выполни задачу "):
         number = lower.removeprefix("выполни задачу ").strip().split(maxsplit=1)[0]
         if number.isdigit():
