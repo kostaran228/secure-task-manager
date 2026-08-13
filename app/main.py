@@ -2,6 +2,7 @@ import os
 import secrets
 import json
 import re
+from difflib import SequenceMatcher
 from base64 import urlsafe_b64encode
 from io import BytesIO
 from datetime import datetime, timedelta, timezone
@@ -117,6 +118,17 @@ class GoogleIdentity(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     google_sub: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True, index=True)
+
+
+class AssistantDraft(Base):
+    """A short-lived conversational draft owned by one user."""
+    __tablename__ = "assistant_drafts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True, index=True)
+    title: Mapped[str] = mapped_column(String(200))
+    assignee_username: Mapped[str] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
 class TaskCreate(BaseModel):
@@ -287,6 +299,33 @@ def normalized_username(username: str) -> str:
     if len(normalized) < 3 or len(normalized) > 32 or not all(character.isalnum() or character in "_.-" for character in normalized):
         raise HTTPException(status_code=422, detail="Username must be 3-32 characters and use letters, numbers, dot, dash, or underscore")
     return normalized
+
+
+def latinize_for_match(value: str) -> str:
+    table = str.maketrans({
+        "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e", "ж": "zh", "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m", "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u", "ф": "f", "х": "h", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "sch", "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu", "я": "ya",
+    })
+    return value.casefold().translate(table).replace(" ", "").replace("-", "")
+
+
+def closest_username(spoken_name: str, usernames: list[str]) -> str | None:
+    needle = latinize_for_match(spoken_name)
+    if not needle or not usernames:
+        return None
+    candidates = [(SequenceMatcher(None, needle, latinize_for_match(name)).ratio(), name) for name in usernames]
+    score, candidate = max(candidates, key=lambda item: item[0])
+    return candidate if score >= 0.5 else None
+
+
+def extract_named_draft(text: str, usernames: list[str]) -> tuple[str, str] | None:
+    """Recognise: 'название купить хлеб, исполнитель Коста'."""
+    title_match = re.search(r"(?:название|назови(?:\s+задачу)?|задача\s+называется)\s*[:—-]?\s*(.+?)(?=\s*(?:,|;|\.\s*)?(?:исполнитель|для\s+исполнителя|ответственный)\b|$)", text, re.IGNORECASE)
+    person_match = re.search(r"(?:исполнитель|для\s+исполнителя|ответственный)\s*[:—-]?\s*([\w.-]+)", text, re.IGNORECASE)
+    if not title_match or not person_match:
+        return None
+    title = title_match.group(1).strip(" .,:;—-")[:200]
+    username = closest_username(person_match.group(1), usernames)
+    return (title, username) if title and username else None
 
 
 def local_ai_reply(text: str) -> str:
@@ -984,9 +1023,37 @@ def list_group_members(group_id: int, user: User = Depends(current_user)) -> lis
 def run_assistant_command(payload: AssistantCommand, user: User = Depends(current_user)) -> AssistantReply:
     """Run a voice/text command through the local assistant with a safe task-action allowlist."""
     with Session(engine) as session:
-        action, task_id, reply = assistant_action(session, user, payload.text)
+        action, task_id, reply = None, None, None
+        usernames = [name for name in session.scalars(select(User.username)).all() if name]
+        draft = session.scalar(select(AssistantDraft).where(AssistantDraft.user_id == user.id))
+        if payload.text.casefold().strip() in {"отмена", "отменить", "сброс", "сбрось"} and draft:
+            session.delete(draft)
+            session.commit()
+            return AssistantReply(reply="Черновик задачи отменён.", action="cancelled")
+        named_draft = extract_named_draft(payload.text, usernames)
+        if named_draft:
+            title, assignee = named_draft
+            if draft:
+                draft.title, draft.assignee_username, draft.created_at = title, assignee, datetime.utcnow()
+            else:
+                session.add(AssistantDraft(user_id=user.id, title=title, assignee_username=assignee))
+            session.commit()
+            return AssistantReply(reply=f"Понял: задача «{title}», исполнитель «{assignee}». Укажите параметры: например «разовая, 2 балла» или «ежедневная, 5 баллов».", action="clarify")
+        if draft:
+            lower = payload.text.casefold()
+            points_match = re.search(r"(\d+)\s+балл", lower)
+            task_type = "daily" if "ежеднев" in lower else "weekly" if "еженедель" in lower else "once"
+            if not points_match and not any(word in lower for word in ("разовая", "ежеднев", "еженедель")):
+                return AssistantReply(reply=f"Для задачи «{draft.title}» и исполнителя «{draft.assignee_username}» укажите повторение и баллы. Например: «разовая, 2 балла».", action="clarify")
+            points = max(1, int(points_match.group(1))) if points_match else 1
+            command = f"создай задачу {task_type} {draft.title} на {points} баллов для {draft.assignee_username}"
+            action, task_id, reply = assistant_action(session, user, command)
+            if reply and action == "created":
+                session.delete(draft)
+                session.commit()
         if reply is None:
-            usernames = [name for name in session.scalars(select(User.username)).all() if name]
+            action, task_id, reply = assistant_action(session, user, payload.text)
+        if reply is None:
             if user.is_server_admin:
                 visible_tasks = session.scalars(select(Task).order_by(Task.id.desc())).all()
             else:
