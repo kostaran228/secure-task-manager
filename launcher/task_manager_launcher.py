@@ -12,7 +12,7 @@ import time
 import tkinter as tk
 import urllib.request
 from pathlib import Path
-from tkinter import messagebox
+from tkinter import filedialog, messagebox
 
 
 APP_URL = "http://localhost:8000"
@@ -26,6 +26,8 @@ ACCENT = "#78aaff"
 SUCCESS = "#58d6a1"
 TUNNEL_STATUS_FILE = Path(os.getenv("TASK_MANAGER_DATA_DIR", "D:/TaskManagerData")) / "cloudflare-tunnel.json"
 WEBVIEW_STORAGE = Path(os.getenv("TASK_MANAGER_DATA_DIR", "D:/TaskManagerData")) / "desktop-webview"
+AI_SETTINGS_FILE = Path(os.getenv("TASK_MANAGER_DATA_DIR", "D:/TaskManagerData")) / "ai-settings.json"
+DEFAULT_AI_MODELS_DIR = Path(os.getenv("TASK_MANAGER_DATA_DIR", "D:/TaskManagerData")) / "OllamaModels"
 OLLAMA_MODELS = {
     "qwen3:0.6b": "Экономный — Qwen3 0.6B (для очень слабого ПК)",
     "qwen3:1.7b": "Рекомендуемый — Qwen3 1.7B (голосовые команды и задачи)",
@@ -91,6 +93,31 @@ class DesktopServerApi:
     ai_install_error: str | None = None
     ai_progress = 0
     ai_stage = ""
+
+    @staticmethod
+    def ai_models_dir() -> Path:
+        try:
+            configured = json.loads(AI_SETTINGS_FILE.read_text(encoding="utf-8")).get("models_dir")
+            if configured:
+                return Path(configured)
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            pass
+        return DEFAULT_AI_MODELS_DIR
+
+    @staticmethod
+    def save_ai_models_dir(folder: Path) -> None:
+        AI_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        AI_SETTINGS_FILE.write_text(json.dumps({"models_dir": str(folder)}), encoding="utf-8")
+
+    @staticmethod
+    def choose_ai_models_folder() -> dict[str, object]:
+        selected = filedialog.askdirectory(initialdir=str(DesktopServerApi.ai_models_dir()), title="Папка для моделей локального ИИ")
+        if not selected:
+            return {"ok": False, "message": "Folder selection cancelled"}
+        folder = Path(selected).resolve()
+        folder.mkdir(parents=True, exist_ok=True)
+        DesktopServerApi.save_ai_models_dir(folder)
+        return {"ok": True, "folder": str(folder)}
 
     @staticmethod
     def _saved_tunnel() -> dict[str, object] | None:
@@ -190,14 +217,22 @@ class DesktopServerApi:
             "error": DesktopServerApi.ai_install_error,
             "progress": DesktopServerApi.ai_progress,
             "stage": DesktopServerApi.ai_stage,
+            "models_dir": str(DesktopServerApi.ai_models_dir()),
         }
 
     @staticmethod
-    def install_ai_model(model: str) -> dict[str, object]:
+    def install_ai_model(model: str, models_dir: str | None = None) -> dict[str, object]:
         if model not in OLLAMA_MODELS:
             return {"ok": False, "message": "Unknown AI model"}
         if DesktopServerApi.ai_installing:
             return {"ok": False, "message": "Installation is already running"}
+
+        try:
+            models_folder = Path(models_dir).expanduser().resolve() if models_dir else DesktopServerApi.ai_models_dir()
+            models_folder.mkdir(parents=True, exist_ok=True)
+            DesktopServerApi.save_ai_models_dir(models_folder)
+        except OSError:
+            return {"ok": False, "message": "The selected folder is unavailable"}
 
         def install() -> None:
             DesktopServerApi.ai_installing = True
@@ -216,6 +251,15 @@ class DesktopServerApi:
                         time.sleep(1)
                 if executable is None:
                     raise RuntimeError("Ollama installation did not finish")
+                # Models are the large part. Persist the location and run the
+                # local service with the same setting so C: stays mostly free.
+                os.environ["OLLAMA_MODELS"] = str(models_folder)
+                subprocess.run(["setx", "OLLAMA_MODELS", str(models_folder)], check=False, creationflags=WINDOWS_NO_CONSOLE)
+                subprocess.run(["taskkill", "/IM", "ollama.exe", "/F"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=WINDOWS_NO_CONSOLE)
+                serve_env = os.environ.copy()
+                serve_env["OLLAMA_MODELS"] = str(models_folder)
+                subprocess.Popen([executable, "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=serve_env, creationflags=WINDOWS_NO_CONSOLE)
+                time.sleep(2)
                 DesktopServerApi.ai_progress = 5
                 DesktopServerApi.ai_stage = "Скачиваю выбранную модель…"
                 process = subprocess.Popen(
