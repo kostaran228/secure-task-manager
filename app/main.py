@@ -147,6 +147,7 @@ class TaskUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=1000)
     points: int | None = Field(default=None, ge=0, le=100000)
+    assignee_username: str | None = Field(default=None, max_length=32)
 
 
 class TaskRead(TaskCreate):
@@ -1179,6 +1180,19 @@ def update_task(task_id: int, payload: TaskUpdate, user: User = Depends(current_
         changes = payload.model_dump(exclude_unset=True)
         if not changes:
             raise HTTPException(status_code=422, detail="Choose at least one field to update")
+        assignee_username = changes.pop("assignee_username", None)
+        if assignee_username is not None:
+            if task.group_id is None:
+                raise HTTPException(status_code=422, detail="A personal task cannot be reassigned")
+            target = session.scalar(select(User).where(User.username == normalized_username(assignee_username)))
+            target_membership = membership_for(session, task.group_id, target.id) if target else None
+            if target_membership is None:
+                raise HTTPException(status_code=404, detail="The selected participant is not in this team")
+            if not user.is_server_admin:
+                actor = membership_for(session, task.group_id, user.id)
+                if target_membership.priority >= actor.priority:
+                    raise HTTPException(status_code=403, detail="A task can be assigned only to a participant with a lower priority")
+            task.assignee_id = target.id
         for field, value in changes.items():
             setattr(task, field, value.strip() if isinstance(value, str) else value)
         session.commit()
