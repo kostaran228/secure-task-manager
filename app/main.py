@@ -34,6 +34,23 @@ SERVER_URL = os.getenv("SERVER_URL", "http://localhost:8000").rstrip("/")
 PAIRING_CODE = secrets.token_urlsafe(6)
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:1.7b")
+
+TASK_ASSISTANT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "action": {"type": "string", "enum": ["create", "update_title", "update_description", "update_points", "assign", "complete", "approve", "delete", "list", "clarify", "none"]},
+        "task_id": {"type": ["integer", "null"]},
+        "task_ids": {"type": "array", "items": {"type": "integer"}},
+        "title": {"type": ["string", "null"]},
+        "description": {"type": ["string", "null"]},
+        "assignees": {"type": "array", "items": {"type": "string"}},
+        "task_type": {"type": "string", "enum": ["once", "daily", "weekly"]},
+        "points": {"type": ["integer", "null"]},
+        "question": {"type": ["string", "null"]},
+    },
+    "required": ["action", "task_id", "task_ids", "title", "description", "assignees", "task_type", "points", "question"],
+    "additionalProperties": False,
+}
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
 GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "")
@@ -302,7 +319,7 @@ def local_ai_task_command(text: str, usernames: list[str], tasks: list[Task], as
         if not model:
             return None
         prompt = (
-            "Ты переводишь голосовую фразу в JSON для менеджера задач. Никаких пояснений и Markdown. "
+            "Ты — диспетчер задач, а не собеседник. Верни JSON строго по схеме, без пояснений и Markdown. "
             "Верни только один объект. Доступные action: create, update_title, update_description, assign, complete, approve, delete, list, none. "
             "Для create: {\"action\":\"create\",\"title\":\"...\",\"assignees\":[\"точное_имя\"],\"task_type\":\"once|daily|weekly\",\"points\":0}. "
             "Для update_title: {\"action\":\"update_title\",\"task_id\":12,\"title\":\"...\"}. "
@@ -312,16 +329,22 @@ def local_ai_task_command(text: str, usernames: list[str], tasks: list[Task], as
             "Для update_points: {\"action\":\"update_points\",\"task_id\":12,\"points\":5}. "
             "Для complete, approve или delete укажи task_ids — массив номеров, можно несколько. Для list других полей не нужно. "
             "Если задача названа словами, найди её по title, description или assignee в списке и верни её номер. "
-            "Если намерение неясно, верни только {\"action\":\"none\"}. Никогда не объясняй, как нажимать кнопки. "
+            "Никогда не создавай задачу без непустого title. Если пользователь просит назначить задачу, но не назвал саму задачу, верни action clarify и краткий question: «Какую задачу назначить?». "
+            "Если пользователь указал баллы для существующей задачи, верни update_points для найденного task_id. "
+            "Примеры: «Назначь Косте купить хлеб, 2 балла» -> create с title «купить хлеб», assignees [«коста»], points 2. «Косте назначь задачу на 2 балла» -> clarify. "
+            "Если намерение неясно, верни action none. Никогда не объясняй, как нажимать кнопки. "
             f"Допустимые имена участников: {', '.join(usernames) or 'нет'}. "
             f"Текущие задачи, по которым можно выполнять действия: {json.dumps([{'id': task.id, 'title': task.title, 'description': task.description or '', 'assignee': assignee_names.get(task.assignee_id or -1, ''), 'points': task.points, 'status': task.task_status} for task in tasks], ensure_ascii=False)}. "
             f"Фраза: {text}"
         )
-        payload = json.dumps({"model": model, "prompt": prompt, "stream": False, "format": "json", "options": {"temperature": 0}}).encode()
+        payload = json.dumps({"model": model, "prompt": prompt, "stream": False, "format": TASK_ASSISTANT_SCHEMA, "options": {"temperature": 0, "num_predict": 220}}).encode()
         request = Request(f"{OLLAMA_BASE_URL}/api/generate", data=payload, headers={"Content-Type": "application/json"})
         with urlopen(request, timeout=60) as response:
             decoded = json.loads(str(json.load(response).get("response", "{}")))
         action = decoded.get("action")
+        if action == "clarify":
+            question = decoded.get("question")
+            return f"clarify {str(question).strip()}" if isinstance(question, str) and question.strip() else "clarify Какую задачу нужно назначить?"
         if action in {"complete", "approve", "delete", "list"}:
             task_ids = decoded.get("task_ids", [decoded.get("task_id")])
             valid_ids = [str(int(task_id)) for task_id in task_ids if isinstance(task_id, int)] if isinstance(task_ids, list) else []
@@ -972,7 +995,10 @@ def run_assistant_command(payload: AssistantCommand, user: User = Depends(curren
             assignee_names = {user_id: username for user_id, username in session.execute(select(User.id, User.username)).all() if username}
             generated_command = local_ai_task_command(payload.text, usernames, visible_tasks, assignee_names)
             if generated_command:
-                action, task_id, reply = assistant_action(session, user, generated_command)
+                if generated_command.startswith("clarify "):
+                    action, task_id, reply = "clarify", None, generated_command.removeprefix("clarify ")
+                else:
+                    action, task_id, reply = assistant_action(session, user, generated_command)
             if reply is None:
                 fallback_command = infer_referenced_task_command(payload.text, visible_tasks, assignee_names)
                 if fallback_command:
