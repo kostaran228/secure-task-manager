@@ -32,6 +32,7 @@ REMEMBERED_TOKEN_LIFETIME_DAYS = 30
 SERVER_URL = os.getenv("SERVER_URL", "http://localhost:8000").rstrip("/")
 PAIRING_CODE = secrets.token_urlsafe(6)
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:1.7b")
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
 GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "")
@@ -161,6 +162,16 @@ class AiStatus(BaseModel):
     selected_model: str | None = None
 
 
+class AssistantCommand(BaseModel):
+    text: str = Field(min_length=1, max_length=1000)
+
+
+class AssistantReply(BaseModel):
+    reply: str
+    action: str | None = None
+    task_id: int | None = None
+
+
 class ServerSetupStatus(BaseModel):
     configured: bool
 
@@ -258,6 +269,64 @@ def normalized_username(username: str) -> str:
     if len(normalized) < 3 or len(normalized) > 32 or not all(character.isalnum() or character in "_.-" for character in normalized):
         raise HTTPException(status_code=422, detail="Username must be 3-32 characters and use letters, numbers, dot, dash, or underscore")
     return normalized
+
+
+def local_ai_reply(text: str) -> str:
+    """Ask the locally running Ollama model; no cloud key is used here."""
+    try:
+        with urlopen(f"{OLLAMA_BASE_URL}/api/tags", timeout=2) as response:
+            installed = [item.get("name", "") for item in json.load(response).get("models", [])]
+        model = OLLAMA_MODEL if OLLAMA_MODEL in installed else next((name for name in installed if name.startswith("qwen3:")), None)
+        if not model:
+            return "Локальная модель ещё не установлена. Откройте панель администратора и установите Qwen3."
+        prompt = (
+            "Ты локальный помощник Task Manager. Отвечай по-русски, коротко и дружелюбно. "
+            "Не выдумывай выполненные действия: сервер сам подтверждает изменения. "
+            f"Сообщение пользователя: {text}"
+        )
+        payload = json.dumps({"model": model, "prompt": prompt, "stream": False, "options": {"temperature": 0.3}}).encode()
+        request = Request(f"{OLLAMA_BASE_URL}/api/generate", data=payload, headers={"Content-Type": "application/json"})
+        with urlopen(request, timeout=60) as response:
+            return str(json.load(response).get("response", "Готово.")).strip() or "Готово."
+    except (HTTPError, URLError, TimeoutError, ValueError):
+        return "Локальный ИИ сейчас недоступен. Проверьте, что Ollama и выбранная модель запущены у администратора."
+
+
+def assistant_action(session: Session, user: User, text: str) -> tuple[str | None, int | None, str | None]:
+    """Small, auditable command set. The language model never receives direct DB access."""
+    command = " ".join(text.strip().split())
+    lower = command.casefold()
+    for prefix in ("создай задачу ", "добавь задачу "):
+        if lower.startswith(prefix):
+            title = command[len(prefix):].strip(" .,!?:;")
+            if not title:
+                return None, None, "После команды назовите задачу, например: «Помощник, создай задачу купить продукты»."
+            task = Task(title=title[:200], owner_id=user.id, assignee_id=user.id, task_type="once", points=0)
+            session.add(task)
+            session.commit()
+            session.refresh(task)
+            return "created", task.id, f"Создал задачу: «{task.title}»."
+    if lower.startswith("выполни задачу "):
+        number = lower.removeprefix("выполни задачу ").strip().split(maxsplit=1)[0]
+        if number.isdigit():
+            task = session.get(Task, int(number))
+            if task and task.assignee_id == user.id and task.task_status == "pending":
+                task.task_status = "submitted"
+                session.commit()
+                return "submitted", task.id, f"Задача «{task.title}» отмечена как выполненная и ждёт подтверждения."
+            return None, None, "Не нашёл доступную вам синюю задачу с таким номером."
+    if lower.startswith("удали задачу "):
+        number = lower.removeprefix("удали задачу ").strip().split(maxsplit=1)[0]
+        if number.isdigit():
+            task = session.get(Task, int(number))
+            allowed = task and (user.is_server_admin or (task.group_id is None and task.owner_id == user.id))
+            if allowed:
+                title = task.title
+                session.delete(task)
+                session.commit()
+                return "deleted", int(number), f"Удалил задачу «{title}»."
+            return None, None, "Эту задачу нельзя удалить с вашими текущими правами."
+    return None, None, None
 
 
 def jwt_secret() -> str:
@@ -614,6 +683,16 @@ def list_group_members(group_id: int, user: User = Depends(current_user)) -> lis
             .order_by(Membership.priority.desc(), User.username)
         ).all()
         return [GroupMemberRead(username=username or "unknown", role=role, priority=priority) for username, role, priority in rows]
+
+
+@app.post("/assistant/command", response_model=AssistantReply)
+def run_assistant_command(payload: AssistantCommand, user: User = Depends(current_user)) -> AssistantReply:
+    """Run a voice/text command through the local assistant with a safe task-action allowlist."""
+    with Session(engine) as session:
+        action, task_id, reply = assistant_action(session, user, payload.text)
+    if reply:
+        return AssistantReply(reply=reply, action=action, task_id=task_id)
+    return AssistantReply(reply=local_ai_reply(payload.text))
 
 
 @app.post("/tasks", response_model=TaskRead, status_code=status.HTTP_201_CREATED)
