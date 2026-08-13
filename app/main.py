@@ -1019,6 +1019,20 @@ def list_group_members(group_id: int, user: User = Depends(current_user)) -> lis
         return [GroupMemberRead(username=username or "unknown", role=role, priority=priority) for username, role, priority in rows]
 
 
+@app.get("/groups/{group_id}/available-users", response_model=list[RegisteredUserRead])
+def available_group_users(group_id: int, user: User = Depends(current_user)) -> list[RegisteredUserRead]:
+    """Return registered users that this team's administrator can add."""
+    with Session(engine) as session:
+        actor = membership_for(session, group_id, user.id)
+        if actor.role != "admin":
+            raise HTTPException(status_code=403, detail="Only a team administrator can add participants")
+        member_ids = select(Membership.user_id).where(Membership.group_id == group_id)
+        users = session.scalars(
+            select(User).where(User.username.is_not(None), User.id.not_in(member_ids)).order_by(User.username)
+        ).all()
+        return [RegisteredUserRead(username=registered.username or f"user-{registered.id}") for registered in users]
+
+
 @app.post("/assistant/command", response_model=AssistantReply)
 def run_assistant_command(payload: AssistantCommand, user: User = Depends(current_user)) -> AssistantReply:
     """Run a voice/text command through the local assistant with a safe task-action allowlist."""
