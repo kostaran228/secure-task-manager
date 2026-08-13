@@ -26,6 +26,11 @@ ACCENT = "#78aaff"
 SUCCESS = "#58d6a1"
 TUNNEL_STATUS_FILE = Path(os.getenv("TASK_MANAGER_DATA_DIR", "D:/TaskManagerData")) / "cloudflare-tunnel.json"
 WEBVIEW_STORAGE = Path(os.getenv("TASK_MANAGER_DATA_DIR", "D:/TaskManagerData")) / "desktop-webview"
+OLLAMA_MODELS = {
+    "qwen3:0.6b": "Экономный — Qwen3 0.6B (для очень слабого ПК)",
+    "qwen3:1.7b": "Рекомендуемый — Qwen3 1.7B (голосовые команды и задачи)",
+    "qwen3:4b": "Улучшенный — Qwen3 4B (нужен более мощный ПК)",
+}
 
 
 def project_root() -> Path:
@@ -60,11 +65,30 @@ def cloudflared_executable() -> str | None:
     return None
 
 
+def ollama_executable() -> str | None:
+    candidates = [
+        Path("D:/DevTools/Ollama/ollama.exe"),
+        Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Ollama" / "ollama.exe",
+        Path("C:/Program Files/Ollama/ollama.exe"),
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    for folder in os.environ.get("PATH", "").split(os.pathsep):
+        candidate = Path(folder) / "ollama.exe"
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
 class DesktopServerApi:
     """Methods exposed only to the local desktop WebView."""
 
     tunnel_process: subprocess.Popen[str] | None = None
     tunnel_url: str | None = None
+    ai_installing = False
+    ai_selected_model: str | None = None
+    ai_install_error: str | None = None
 
     @staticmethod
     def _saved_tunnel() -> dict[str, object] | None:
@@ -145,6 +169,49 @@ class DesktopServerApi:
         DesktopServerApi.tunnel_url = None
         TUNNEL_STATUS_FILE.unlink(missing_ok=True)
         return {"ok": True, "running": False}
+
+    @staticmethod
+    def ai_status() -> dict[str, object]:
+        executable = ollama_executable()
+        models: list[str] = []
+        if executable:
+            try:
+                result = subprocess.run([executable, "list"], capture_output=True, text=True, timeout=8, creationflags=WINDOWS_NO_CONSOLE)
+                models = [line.split()[0] for line in result.stdout.splitlines()[1:] if line.strip()]
+            except (OSError, subprocess.SubprocessError):
+                pass
+        return {"available": executable is not None, "models": models, "installing": DesktopServerApi.ai_installing, "selected_model": DesktopServerApi.ai_selected_model, "error": DesktopServerApi.ai_install_error}
+
+    @staticmethod
+    def install_ai_model(model: str) -> dict[str, object]:
+        if model not in OLLAMA_MODELS:
+            return {"ok": False, "message": "Unknown AI model"}
+        if DesktopServerApi.ai_installing:
+            return {"ok": False, "message": "Installation is already running"}
+
+        def install() -> None:
+            DesktopServerApi.ai_installing = True
+            DesktopServerApi.ai_selected_model = model
+            DesktopServerApi.ai_install_error = None
+            try:
+                executable = ollama_executable()
+                if executable is None:
+                    subprocess.run(["winget", "install", "--id", "Ollama.Ollama", "-e", "--accept-package-agreements", "--accept-source-agreements"], check=True, creationflags=WINDOWS_NO_CONSOLE)
+                    for _ in range(30):
+                        executable = ollama_executable()
+                        if executable:
+                            break
+                        time.sleep(1)
+                if executable is None:
+                    raise RuntimeError("Ollama installation did not finish")
+                subprocess.run([executable, "pull", model], check=True, creationflags=WINDOWS_NO_CONSOLE)
+            except (OSError, subprocess.SubprocessError, RuntimeError) as error:
+                DesktopServerApi.ai_install_error = str(error)
+            finally:
+                DesktopServerApi.ai_installing = False
+
+        threading.Thread(target=install, daemon=True).start()
+        return {"ok": True, "message": "Downloading model"}
 
     @staticmethod
     def _run_compose(command: str) -> dict[str, object]:

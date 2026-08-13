@@ -157,6 +157,8 @@ class AdminStatus(PairingInfo):
 class AiStatus(BaseModel):
     available: bool
     models: list[str] = []
+    installing: bool = False
+    selected_model: str | None = None
 
 
 class ServerSetupStatus(BaseModel):
