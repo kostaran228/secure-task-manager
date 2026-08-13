@@ -51,6 +51,9 @@ def test_create_and_list_task() -> None:
     assert created.json()["reminder_at"] == "2026-12-31T15:30:00"
     assert tasks.status_code == 200
     assert any(task["id"] == created.json()["id"] for task in tasks.json())
+    deleted = client.delete(f"/tasks/{created.json()['id']}", headers=auth_headers)
+    assert deleted.status_code == 200
+    assert all(task["id"] != created.json()["id"] for task in client.get("/tasks", headers=auth_headers).json())
 
 
 def test_registration_and_login_issue_access_tokens() -> None:

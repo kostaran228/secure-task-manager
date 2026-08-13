@@ -114,6 +114,7 @@ class TaskRead(TaskCreate):
     created_at: datetime
     task_status: str
     assignee_id: int | None = None
+    owner_id: int | None = None
     approved_at: datetime | None = None
     next_occurrence_at: datetime | None = None
 
@@ -621,6 +622,24 @@ def approve_task_completion(task_id: int, user: User = Depends(current_user)) ->
             task.next_occurrence_at = datetime.utcnow() + interval
         session.commit()
         return {"status": "approved"}
+
+
+@app.delete("/tasks/{task_id}")
+def delete_task(task_id: int, user: User = Depends(current_user)) -> dict[str, str]:
+    """Remove a task only when the caller owns it or administers its team/server."""
+    with Session(engine) as session:
+        task = session.get(Task, task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        if not user.is_server_admin:
+            if task.group_id is None:
+                if task.owner_id != user.id:
+                    raise HTTPException(status_code=403, detail="Only the task owner can delete this task")
+            elif membership_for(session, task.group_id, user.id).role != "admin":
+                raise HTTPException(status_code=403, detail="Only a team administrator can delete this task")
+        session.delete(task)
+        session.commit()
+        return {"status": "deleted"}
 
 
 @app.get("/tasks", response_model=list[TaskRead])
