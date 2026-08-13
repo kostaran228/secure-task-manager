@@ -332,6 +332,27 @@ def refresh_recurring_tasks(session: Session) -> None:
         session.commit()
 
 
+def task_read(session: Session, task: Task) -> TaskRead:
+    assignee = session.get(User, task.assignee_id) if task.assignee_id is not None else None
+    return TaskRead(
+        id=task.id,
+        title=task.title,
+        description=task.description,
+        reminder_at=task.reminder_at,
+        group_id=task.group_id,
+        assignee_username=assignee.username if assignee is not None else None,
+        assignee_usernames=[],
+        task_type=task.task_type,
+        points=task.points,
+        created_at=task.created_at,
+        task_status=task.task_status,
+        assignee_id=task.assignee_id,
+        owner_id=task.owner_id,
+        approved_at=task.approved_at,
+        next_occurrence_at=task.next_occurrence_at,
+    )
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -584,7 +605,7 @@ def list_group_members(group_id: int, user: User = Depends(current_user)) -> lis
 
 
 @app.post("/tasks", response_model=TaskRead, status_code=status.HTTP_201_CREATED)
-def create_task(payload: TaskCreate, user: User = Depends(current_user)) -> Task:
+def create_task(payload: TaskCreate, user: User = Depends(current_user)) -> TaskRead:
     with Session(engine) as session:
         assignee_ids = [user.id]
         if payload.group_id is not None:
@@ -610,7 +631,7 @@ def create_task(payload: TaskCreate, user: User = Depends(current_user)) -> Task
         session.add_all(tasks)
         session.commit()
         session.refresh(tasks[0])
-        return tasks[0]
+        return task_read(session, tasks[0])
 
 
 @app.post("/tasks/{task_id}/complete")
@@ -685,15 +706,16 @@ def delete_task(task_id: int, user: User = Depends(current_user)) -> dict[str, s
 
 
 @app.get("/tasks", response_model=list[TaskRead])
-def list_tasks(user: User = Depends(current_user)) -> list[Task]:
+def list_tasks(user: User = Depends(current_user)) -> list[TaskRead]:
     with Session(engine) as session:
         refresh_recurring_tasks(session)
         groups = session.scalars(select(Membership.group_id).where(Membership.user_id == user.id)).all()
-        return list(session.scalars(select(Task).where((Task.owner_id == user.id) | (Task.group_id.in_(groups))).order_by(Task.id.desc())))
+        tasks = session.scalars(select(Task).where((Task.owner_id == user.id) | (Task.group_id.in_(groups))).order_by(Task.id.desc())).all()
+        return [task_read(session, task) for task in tasks]
 
 
 @app.get("/tasks/{task_id}", response_model=TaskRead)
-def get_task(task_id: int, user: User = Depends(current_user)) -> Task:
+def get_task(task_id: int, user: User = Depends(current_user)) -> TaskRead:
     with Session(engine) as session:
         task = session.get(Task, task_id)
         if task is None:
@@ -702,4 +724,4 @@ def get_task(task_id: int, user: User = Depends(current_user)) -> Task:
             raise HTTPException(status_code=404, detail="Task not found")
         if task.group_id is not None:
             membership_for(session, task.group_id, user.id)
-        return task
+        return task_read(session, task)
