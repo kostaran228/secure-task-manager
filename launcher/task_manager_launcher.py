@@ -37,7 +37,9 @@ OLLAMA_MODELS = {
 
 def project_root() -> Path:
     if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent.parent
+        # Installed builds keep the launcher beside docker-compose.yml.
+        installed_root = Path(sys.executable).resolve().parent
+        return installed_root if (installed_root / "docker-compose.yml").exists() else installed_root.parent
     return Path(__file__).resolve().parent.parent
 
 

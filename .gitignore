@@ -11,4 +11,7 @@ mobile/android/.gradle/
 mobile/android/build/
 mobile/android/app/build/
 launcher/TaskManagerLauncher.exe
+TaskManager.spec
+installer/staging/
+installer/output/
 launcher/__pycache__/
