@@ -89,6 +89,8 @@ class DesktopServerApi:
     ai_installing = False
     ai_selected_model: str | None = None
     ai_install_error: str | None = None
+    ai_progress = 0
+    ai_stage = ""
 
     @staticmethod
     def _saved_tunnel() -> dict[str, object] | None:
@@ -180,7 +182,15 @@ class DesktopServerApi:
                 models = [line.split()[0] for line in result.stdout.splitlines()[1:] if line.strip()]
             except (OSError, subprocess.SubprocessError):
                 pass
-        return {"available": executable is not None, "models": models, "installing": DesktopServerApi.ai_installing, "selected_model": DesktopServerApi.ai_selected_model, "error": DesktopServerApi.ai_install_error}
+        return {
+            "available": executable is not None,
+            "models": models,
+            "installing": DesktopServerApi.ai_installing,
+            "selected_model": DesktopServerApi.ai_selected_model,
+            "error": DesktopServerApi.ai_install_error,
+            "progress": DesktopServerApi.ai_progress,
+            "stage": DesktopServerApi.ai_stage,
+        }
 
     @staticmethod
     def install_ai_model(model: str) -> dict[str, object]:
@@ -193,6 +203,8 @@ class DesktopServerApi:
             DesktopServerApi.ai_installing = True
             DesktopServerApi.ai_selected_model = model
             DesktopServerApi.ai_install_error = None
+            DesktopServerApi.ai_progress = 1
+            DesktopServerApi.ai_stage = "Устанавливаю локальный ИИ-движок…"
             try:
                 executable = ollama_executable()
                 if executable is None:
@@ -204,9 +216,28 @@ class DesktopServerApi:
                         time.sleep(1)
                 if executable is None:
                     raise RuntimeError("Ollama installation did not finish")
-                subprocess.run([executable, "pull", model], check=True, creationflags=WINDOWS_NO_CONSOLE)
+                DesktopServerApi.ai_progress = 5
+                DesktopServerApi.ai_stage = "Скачиваю выбранную модель…"
+                process = subprocess.Popen(
+                    [executable, "pull", model],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    creationflags=WINDOWS_NO_CONSOLE,
+                )
+                if process.stdout is not None:
+                    for line in process.stdout:
+                        percentage = re.search(r"(\d{1,3})%", line)
+                        if percentage:
+                            DesktopServerApi.ai_progress = max(5, min(99, int(percentage.group(1))))
+                        DesktopServerApi.ai_stage = line.strip() or "Скачиваю выбранную модель…"
+                if process.wait() != 0:
+                    raise RuntimeError("Model download failed")
+                DesktopServerApi.ai_progress = 100
+                DesktopServerApi.ai_stage = "Модель установлена и готова."
             except (OSError, subprocess.SubprocessError, RuntimeError) as error:
                 DesktopServerApi.ai_install_error = str(error)
+                DesktopServerApi.ai_stage = "Не удалось завершить установку."
             finally:
                 DesktopServerApi.ai_installing = False
 
