@@ -41,7 +41,7 @@ def test_create_and_list_task() -> None:
 
     created = client.post(
         "/tasks",
-        json={"title": "Write CI pipeline", "description": "Portfolio milestone", "reminder_at": "2026-12-31T15:30:00"},
+        json={"title": "Write CI pipeline", "description": "Portfolio milestone", "reminder_at": "2026-12-31T15:30:00", "reminder_interval_minutes": 60},
         headers=auth_headers,
     )
     tasks = client.get("/tasks", headers=auth_headers)
@@ -49,6 +49,7 @@ def test_create_and_list_task() -> None:
     assert created.status_code == 201
     assert created.json()["title"] == "Write CI pipeline"
     assert created.json()["reminder_at"] == "2026-12-31T15:30:00"
+    assert created.json()["reminder_interval_minutes"] == 60
     assert tasks.status_code == 200
     assert any(task["id"] == created.json()["id"] for task in tasks.json())
     deleted = client.delete(f"/tasks/{created.json()['id']}", headers=auth_headers)

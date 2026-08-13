@@ -1,6 +1,13 @@
 package com.kostaran.securetaskmanager;
 
+import android.Manifest;
+import android.app.AlarmManager;
+import android.app.PendingIntent;
+import android.content.Context;
+import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.os.Bundle;
+import android.os.Build;
 import android.content.SharedPreferences;
 import android.webkit.JavascriptInterface;
 
@@ -20,6 +27,15 @@ public class MainActivity extends BridgeActivity {
 
     private SharedPreferences connectionStore() {
         return getSharedPreferences(CONNECTION_STORE, MODE_PRIVATE);
+    }
+
+    private PendingIntent reminderIntent(String taskId, String title, int intervalMinutes) {
+        Intent intent = new Intent(MainActivity.this, ReminderReceiver.class);
+        intent.putExtra("task_id", taskId);
+        intent.putExtra("title", title);
+        intent.putExtra("interval_minutes", intervalMinutes);
+        return PendingIntent.getBroadcast(MainActivity.this, taskId.hashCode(), intent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
     }
 
     private void restoreLastServer() {
@@ -43,6 +59,28 @@ public class MainActivity extends BridgeActivity {
         public void forgetServer() {
             connectionStore().edit().remove(SERVER_URL_KEY).commit();
             restoredConnection = false;
+        }
+
+        @JavascriptInterface
+        public void scheduleReminder(String taskId, String title, int intervalMinutes) {
+            int minutes = Math.max(15, intervalMinutes);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                    checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                runOnUiThread(() -> requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 101));
+            }
+            AlarmManager alarms = (AlarmManager) getSystemService(Context.ALARM_SERVICE);
+            PendingIntent pending = reminderIntent(taskId, title, minutes);
+            alarms.cancel(pending);
+            long interval = minutes * 60_000L;
+            alarms.setInexactRepeating(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + interval, interval, pending);
+        }
+
+        @JavascriptInterface
+        public void cancelReminder(String taskId) {
+            AlarmManager alarms = (AlarmManager) getSystemService(Context.ALARM_SERVICE);
+            PendingIntent pending = reminderIntent(taskId, "", 15);
+            alarms.cancel(pending);
+            pending.cancel();
         }
     }
 }

@@ -50,6 +50,7 @@ class Task(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     owner_id: Mapped[int | None] = mapped_column(nullable=True, index=True)
     reminder_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    reminder_interval_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     group_id: Mapped[int | None] = mapped_column(ForeignKey("groups.id"), nullable=True, index=True)
     assignee_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     task_type: Mapped[str] = mapped_column(String(16), default="once", nullable=False)
@@ -103,6 +104,7 @@ class TaskCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=1000)
     reminder_at: datetime | None = None
+    reminder_interval_minutes: int | None = Field(default=None, ge=15, le=10080)
     group_id: int | None = None
     assignee_username: str | None = Field(default=None, max_length=32)
     assignee_usernames: list[str] = Field(default_factory=list, max_length=100)
@@ -224,6 +226,7 @@ def create_tables() -> None:
         if connection.dialect.name == "postgresql":
             connection.exec_driver_sql("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS owner_id INTEGER")
             connection.exec_driver_sql("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS reminder_at TIMESTAMP")
+            connection.exec_driver_sql("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS reminder_interval_minutes INTEGER")
             connection.exec_driver_sql("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS group_id INTEGER")
             connection.exec_driver_sql("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assignee_id INTEGER")
             connection.exec_driver_sql("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS task_type VARCHAR(16) NOT NULL DEFAULT 'once'")
@@ -339,6 +342,7 @@ def task_read(session: Session, task: Task) -> TaskRead:
         title=task.title,
         description=task.description,
         reminder_at=task.reminder_at,
+        reminder_interval_minutes=task.reminder_interval_minutes,
         group_id=task.group_id,
         assignee_username=assignee.username if assignee is not None else None,
         assignee_usernames=[],
