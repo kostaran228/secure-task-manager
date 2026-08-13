@@ -10,6 +10,15 @@ import android.os.Bundle;
 import android.os.Build;
 import android.content.SharedPreferences;
 import android.webkit.JavascriptInterface;
+import android.speech.RecognitionListener;
+import android.speech.RecognizerIntent;
+import android.speech.SpeechRecognizer;
+import android.text.TextUtils;
+
+import org.json.JSONObject;
+
+import java.util.ArrayList;
+import java.util.Locale;
 
 import com.getcapacitor.BridgeActivity;
 
@@ -17,6 +26,8 @@ public class MainActivity extends BridgeActivity {
     private static final String CONNECTION_STORE = "task_manager_connection";
     private static final String SERVER_URL_KEY = "server_url";
     private boolean restoredConnection = false;
+    private SpeechRecognizer voiceRecognizer;
+    private boolean voiceStartPending = false;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -45,6 +56,62 @@ public class MainActivity extends BridgeActivity {
         restoredConnection = true;
         // Wait until Capacitor finishes loading its bundled start screen, then replace it.
         getBridge().getWebView().postDelayed(() -> getBridge().getWebView().loadUrl(savedServer), 900);
+    }
+
+    private void sendVoiceResult(String name, String value) {
+        String script = "window." + name + " && window." + name + "(" + JSONObject.quote(value) + ");";
+        getBridge().getWebView().evaluateJavascript(script, null);
+    }
+
+    private void startNativeVoice() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            voiceStartPending = true;
+            requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, 102);
+            return;
+        }
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            sendVoiceResult("NativeTaskManagerVoiceError", "На этом телефоне недоступно распознавание речи.");
+            return;
+        }
+        if (voiceRecognizer == null) {
+            voiceRecognizer = SpeechRecognizer.createSpeechRecognizer(this);
+            voiceRecognizer.setRecognitionListener(new RecognitionListener() {
+                @Override public void onReadyForSpeech(Bundle params) { sendVoiceResult("NativeTaskManagerVoiceState", "Слушаю…"); }
+                @Override public void onBeginningOfSpeech() { }
+                @Override public void onRmsChanged(float rmsdB) { }
+                @Override public void onBufferReceived(byte[] buffer) { }
+                @Override public void onEndOfSpeech() { }
+                @Override public void onError(int error) { sendVoiceResult("NativeTaskManagerVoiceEnded", ""); }
+                @Override public void onResults(Bundle results) {
+                    ArrayList<String> items = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+                    if (items != null && !items.isEmpty() && !TextUtils.isEmpty(items.get(0))) sendVoiceResult("NativeTaskManagerVoiceResult", items.get(0));
+                    sendVoiceResult("NativeTaskManagerVoiceEnded", "");
+                }
+                @Override public void onPartialResults(Bundle partialResults) { }
+                @Override public void onEvent(int eventType, Bundle params) { }
+            });
+        }
+        Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ru-RU");
+        intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false);
+        voiceRecognizer.startListening(intent);
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == 102) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED && voiceStartPending) startNativeVoice();
+            else sendVoiceResult("NativeTaskManagerVoiceError", "Нужен доступ к микрофону для голосового помощника.");
+            voiceStartPending = false;
+        }
+    }
+
+    @Override
+    public void onDestroy() {
+        if (voiceRecognizer != null) voiceRecognizer.destroy();
+        super.onDestroy();
     }
 
     private class ServerNavigator {
@@ -81,6 +148,16 @@ public class MainActivity extends BridgeActivity {
             PendingIntent pending = reminderIntent(taskId, "", 15);
             alarms.cancel(pending);
             pending.cancel();
+        }
+
+        @JavascriptInterface
+        public void startVoice() {
+            runOnUiThread(() -> startNativeVoice());
+        }
+
+        @JavascriptInterface
+        public void stopVoice() {
+            runOnUiThread(() -> { if (voiceRecognizer != null) voiceRecognizer.cancel(); });
         }
     }
 }
