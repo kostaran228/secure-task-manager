@@ -143,6 +143,12 @@ class TaskCreate(BaseModel):
     points: int = Field(default=1, ge=0, le=100000)
 
 
+class TaskUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=1000)
+    points: int | None = Field(default=None, ge=0, le=100000)
+
+
 class TaskRead(TaskCreate):
     model_config = ConfigDict(from_attributes=True)
     id: int
@@ -477,6 +483,33 @@ def infer_reward_command(text: str, tasks: list[Task], assignee_names: dict[int,
     return f"update_points {ranked[0][1].id} {points}"
 
 
+def infer_reassignment_command(text: str, tasks: list[Task], usernames: list[str], current_username: str) -> str | None:
+    """Resolve spoken 'reassign task <title> to <person>' without relying on exact usernames."""
+    lower = text.casefold()
+    if not re.search(r"\bпере?назнач\w*\b", lower):
+        return None
+    recipient = re.search(r"\b(?:мне|себе|для\s+([\w.-]+)|на\s+([\w.-]+)|исполнителю\s+([\w.-]+))\s*$", lower, re.IGNORECASE)
+    if not recipient:
+        return None
+    spoken_name = current_username if recipient.group(0).strip() in {"мне", "себе"} else next((value for value in recipient.groups() if value), "")
+    target = closest_username(spoken_name, usernames)
+    if not target:
+        return None
+    before = lower[:recipient.start()]
+    number = re.search(r"(?:задач[ауе]?\s*#?|#)(\d+)", before)
+    if number:
+        return f"assign {number.group(1)} {target}"
+    title_words = set(re.findall(r"[\w-]{3,}", re.sub(r"\b(?:пере?назнач\w*|задач[ауе]?|задачи)\b", "", before), flags=re.UNICODE))
+    ranked: list[tuple[int, Task]] = []
+    for task in tasks:
+        task_words = set(re.findall(r"[\w-]{3,}", f"{task.title} {task.description or ''}".casefold(), flags=re.UNICODE))
+        score = len(title_words & task_words)
+        if score:
+            ranked.append((score, task))
+    ranked.sort(key=lambda item: (-item[0], -item[1].id))
+    return f"assign {ranked[0][1].id} {target}" if ranked else None
+
+
 def assistant_action(session: Session, user: User, text: str) -> tuple[str | None, int | None, str | None]:
     """Safe Russian task commands. The language model never receives direct DB access."""
     command = " ".join(text.strip().split())
@@ -530,7 +563,7 @@ def assistant_action(session: Session, user: User, text: str) -> tuple[str | Non
         session.commit()
         return "updated", task.id, f"Для задачи «{task.title}» установлено {task.points} баллов."
 
-    assign_existing = re.match(r"^(?:назначь|назначить|поставь)\s+задачу\s+(\d+)\s+для\s+(.+)$", command, re.IGNORECASE)
+    assign_existing = re.match(r"^(?:пере)?назнач(?:ь|ить)?\s+задачу\s+(\d+)\s+(?:для|на|исполнителю)\s+(.+)$", command, re.IGNORECASE)
     generated_assign = re.match(r"^assign\s+(\d+)\s+(.+)$", command, re.IGNORECASE)
     match = assign_existing or generated_assign
     if match:
@@ -540,13 +573,15 @@ def assistant_action(session: Session, user: User, text: str) -> tuple[str | Non
         if task.group_id is None:
             return None, None, "Личную задачу нельзя назначить команде. Создайте новую задачу для участника."
         actor = session.scalar(select(Membership).where(Membership.group_id == task.group_id, Membership.user_id == user.id))
-        requested_names = [name.strip().casefold() for name in re.split(r"\s*(?:,|\s+и\s+)\s*", match.group(2)) if name.strip()]
+        requested_names = [name.strip(" .,!?:;").casefold() for name in re.split(r"\s*(?:,|\s+и\s+)\s*", match.group(2)) if name.strip()]
+        team_usernames = [name for name, in session.execute(select(User.username).join(Membership, Membership.user_id == User.id).where(Membership.group_id == task.group_id, User.username.is_not(None))).all()]
         targets = []
         for name in requested_names:
-            target = session.scalar(select(User).where(User.username == name))
+            matched_name = closest_username(name, team_usernames)
+            target = session.scalar(select(User).where(User.username == matched_name)) if matched_name else None
             membership = session.scalar(select(Membership).where(Membership.group_id == task.group_id, Membership.user_id == (target.id if target else -1)))
             if target is None or membership is None:
-                return None, None, f"Участник «{name}» не состоит в команде этой задачи."
+                return None, None, f"Не нашёл участника «{name}» в команде этой задачи. Скажите имя чуть точнее."
             if not user.is_server_admin and (actor is None or actor.role == "member" or membership.priority >= actor.priority):
                 return None, None, "Назначать можно только участникам с приоритетом ниже вашего."
             targets.append(target)
@@ -1074,7 +1109,10 @@ def run_assistant_command(payload: AssistantCommand, user: User = Depends(curren
                 group_ids = session.scalars(select(Membership.group_id).where(Membership.user_id == user.id)).all()
                 visible_tasks = session.scalars(select(Task).where((Task.owner_id == user.id) | (Task.group_id.in_(group_ids))).order_by(Task.id.desc())).all()
             assignee_names = {user_id: username for user_id, username in session.execute(select(User.id, User.username)).all() if username}
-            generated_command = local_ai_task_command(payload.text, usernames, visible_tasks, assignee_names)
+            reassignment_command = infer_reassignment_command(payload.text, visible_tasks, usernames, user.username or "")
+            if reassignment_command:
+                action, task_id, reply = assistant_action(session, user, reassignment_command)
+            generated_command = None if reply else local_ai_task_command(payload.text, usernames, visible_tasks, assignee_names)
             if generated_command:
                 if generated_command.startswith("clarify "):
                     action, task_id, reply = "clarify", None, generated_command.removeprefix("clarify ")
@@ -1123,6 +1161,29 @@ def create_task(payload: TaskCreate, user: User = Depends(current_user)) -> Task
         session.commit()
         session.refresh(tasks[0])
         return task_read(session, tasks[0])
+
+
+@app.patch("/tasks/{task_id}", response_model=TaskRead)
+def update_task(task_id: int, payload: TaskUpdate, user: User = Depends(current_user)) -> TaskRead:
+    """Edit task fields; only server or team administrators may edit a team task."""
+    with Session(engine) as session:
+        task = session.get(Task, task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        if not user.is_server_admin:
+            if task.group_id is None:
+                if task.owner_id != user.id:
+                    raise HTTPException(status_code=403, detail="Only the task owner can edit this task")
+            elif membership_for(session, task.group_id, user.id).role != "admin":
+                raise HTTPException(status_code=403, detail="Only a team administrator can edit this task")
+        changes = payload.model_dump(exclude_unset=True)
+        if not changes:
+            raise HTTPException(status_code=422, detail="Choose at least one field to update")
+        for field, value in changes.items():
+            setattr(task, field, value.strip() if isinstance(value, str) else value)
+        session.commit()
+        session.refresh(task)
+        return task_read(session, task)
 
 
 @app.post("/tasks/{task_id}/complete")
