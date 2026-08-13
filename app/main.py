@@ -356,6 +356,36 @@ def local_ai_task_command(text: str, usernames: list[str], tasks: list[Task], as
         return None
 
 
+def infer_referenced_task_command(text: str, tasks: list[Task], assignee_names: dict[int, str]) -> str | None:
+    """Deterministic fallback for small local models that fail to emit structured JSON."""
+    lower = text.casefold()
+    is_delete = any(word in lower for word in ("удали", "удалить", "delete"))
+    if not is_delete:
+        return None
+    requested_count_match = re.search(r"(?:удали(?:ть)?\s+)?(\d+)\s+(?:задач|задани)", lower)
+    requested_count = int(requested_count_match.group(1)) if requested_count_match else 1
+    requested_count = max(1, min(20, requested_count))
+    stop_words = {"удали", "удалить", "задачу", "задачи", "задания", "которые", "которое", "есть", "надо", "было", "для", "это", "эти", "у", "и", "в", "на", "с", "по", "delete"}
+    words = {word for word in re.findall(r"[\w-]{3,}", lower, flags=re.UNICODE) if word not in stop_words and not word.isdigit()}
+    owner_match = re.search(r"\bу\s+([\w.-]+)", lower, flags=re.UNICODE)
+    owner = owner_match.group(1) if owner_match else ""
+    ranked: list[tuple[int, Task]] = []
+    for task in tasks:
+        task_words = set(re.findall(r"[\w-]{3,}", f"{task.title} {task.description or ''}".casefold(), flags=re.UNICODE))
+        score = len(words & task_words) * 5
+        assignee = assignee_names.get(task.assignee_id or -1, "").casefold()
+        if owner and owner == assignee:
+            score += 4
+        if score:
+            ranked.append((score, task))
+    ranked.sort(key=lambda item: (-item[0], -item[1].id))
+    selected = [task for _, task in ranked[:requested_count]]
+    # Never guess a bulk delete without either a matching owner or words from task title/description.
+    if len(selected) != requested_count or (not owner and not words):
+        return None
+    return "delete " + ",".join(str(task.id) for task in selected)
+
+
 def assistant_action(session: Session, user: User, text: str) -> tuple[str | None, int | None, str | None]:
     """Safe Russian task commands. The language model never receives direct DB access."""
     command = " ".join(text.strip().split())
@@ -914,8 +944,14 @@ def run_assistant_command(payload: AssistantCommand, user: User = Depends(curren
             generated_command = local_ai_task_command(payload.text, usernames, visible_tasks, assignee_names)
             if generated_command:
                 action, task_id, reply = assistant_action(session, user, generated_command)
+            if reply is None:
+                fallback_command = infer_referenced_task_command(payload.text, visible_tasks, assignee_names)
+                if fallback_command:
+                    action, task_id, reply = assistant_action(session, user, fallback_command)
     if reply:
         return AssistantReply(reply=reply, action=action, task_id=task_id)
+    if any(word in payload.text.casefold() for word in ("удали", "удалить", "измени", "переименуй", "назнач", "создай", "поставь", "выполни", "подтверди")):
+        return AssistantReply(reply="Я не выполнил действие: не смог однозначно определить задачу или у вас недостаточно прав. Назовите исполнителя и часть названия задачи.")
     return AssistantReply(reply=local_ai_reply(payload.text))
 
 
