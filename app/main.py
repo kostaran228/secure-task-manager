@@ -137,6 +137,7 @@ class GoogleAuthStatus(BaseModel):
 
 
 class UserProfile(BaseModel):
+    id: int
     username: str
     is_server_admin: bool
     points_balance: int
@@ -504,6 +505,7 @@ def google_auth_session(request: FastAPIRequest) -> AccessToken:
 @app.get("/auth/me", response_model=UserProfile)
 def me(user: User = Depends(current_user)) -> UserProfile:
     return UserProfile(
+        id=user.id,
         username=user.username or f"user-{user.id}",
         is_server_admin=user.is_server_admin,
         points_balance=user.points_balance,
