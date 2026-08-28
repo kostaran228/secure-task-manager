@@ -19,6 +19,8 @@
 
 ![Рабочий экран задач](docs/screenshots/dashboard.png)
 
+![Панель администратора — данные подключения и настройки ИИ скрыты](docs/screenshots/admin-redacted.png)
+
 ## Технологии
 
 - Python 3.12, FastAPI, SQLAlchemy, PostgreSQL;

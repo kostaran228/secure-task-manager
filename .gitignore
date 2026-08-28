@@ -16,3 +16,4 @@ installer/staging/
 installer/output/
 launcher/__pycache__/
 docker-compose.local.yml
+docs/screenshots/*-original.png
