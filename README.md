@@ -1,59 +1,68 @@
 # Secure Task Manager
 
-Начальная версия API для управления задачами. Проект станет основой портфолио-кейса по Docker, CI/CD, AppSec, Kubernetes и мониторингу.
+Полнофункциональный локальный Task Manager для личных и командных задач. Проект демонстрирует не только разработку API, но и production-oriented подход: авторизацию, роли, контейнеризацию, тестирование, мониторинг, AppSec и подготовку к Kubernetes.
 
-## Запуск
+![Экран входа](docs/screenshots/login.png)
 
-```powershell
-docker compose up --build
-```
+## Возможности
 
-После запуска API доступен по адресу `http://localhost:8000`, а интерактивная документация — на `/docs`.
+- регистрация и вход с JWT, опцией «запомнить меня» и Google OAuth;
+- личные и командные задачи, исполнитель, описание и баллы за выполнение;
+- статусы: новая → отправлена на проверку → подтверждена;
+- повторяющиеся ежедневные и еженедельные задачи;
+- фильтры по статусу и типу задачи;
+- группы, участники и управление приоритетами;
+- разграничение прав участника и администратора сервера;
+- QR-подключение мобильных устройств к локальному серверу;
+- локальный текстовый и голосовой AI-помощник без передачи задач сторонним AI API;
+- Prometheus-метрики и Grafana-дашборды.
 
-## Проверка
+## Технологии
 
-```powershell
-Invoke-RestMethod http://localhost:8000/health
-```
+- Python 3.12, FastAPI, SQLAlchemy, PostgreSQL;
+- JWT, Argon2, Google OAuth;
+- Docker Compose;
+- Prometheus и Grafana;
+- GitHub Actions: CI, Semgrep, Trivy и release pipeline;
+- Kubernetes: Deployments, probes, HPA, Ingress, resource limits и security context;
+- Cloudflare Worker для безопасного внешнего доступа.
 
-## Тесты
+## Быстрый запуск
 
-```powershell
+1. Скопируйте `.env.example` в `.env` и замените демонстрационные секреты.
+2. Запустите окружение:
+
+   ```bash
+   docker compose up --build
+   ```
+
+3. Откройте:
+   - приложение: `http://localhost:8000`;
+   - API-документацию: `http://localhost:8000/docs`;
+   - Prometheus: `http://localhost:9090`;
+   - Grafana: `http://localhost:3000`.
+
+## Проверка качества
+
+```bash
 python -m pip install -r requirements-dev.txt
 python -m pytest -q
 ```
 
-После публикации в GitHub workflow автоматически запускает тесты и проверяет сборку Docker-образа для каждого pull request и изменения в основной ветке.
+GitHub Actions автоматически запускает тесты, Docker build, Semgrep-анализ и Trivy-сканирование образа для изменений в основной ветке и pull request.
 
-## Безопасность
+## Документация
 
-Отдельный workflow выполняет Semgrep-анализ исходного кода и Trivy-сканирование собранного Docker-образа. Он запускается для pull request, изменений в основной ветке и раз в неделю.
+- [Архитектура](docs/ARCHITECTURE.md)
+- [Аутентификация](docs/AUTHENTICATION.md)
+- [Security case study](docs/SECURITY_CASE_STUDY.md)
+- [Демонстрация для интервью](docs/PORTFOLIO_DEMO.md)
+- [Руководство пользователя RU/EN](docs/USER_GUIDE_RU_EN.md)
 
-## Наблюдаемость
+## Что демонстрирует проект
 
-После `docker compose up --build` доступны:
-
-- Prometheus: `http://localhost:9090`;
-- Grafana: `http://localhost:3000`.
-
-API публикует технические метрики на `/metrics`. Учётные данные Grafana в этом демонстрационном запуске задаются в Compose; перед production-деплоем пароль нужно перенести в секреты CI/CD или менеджер секретов.
-
-## Kubernetes
-
-Манифесты в `k8s/` задают развёртывание API с двумя репликами, probes, ограничениями ресурсов, запретом повышения привилегий, Service, Ingress и HPA. Перед применением нужно:
-
-1. опубликовать Docker-образ в GitHub Container Registry;
-2. заменить образ в `k8s/api.yaml`;
-3. создать реальный Secret на основе `k8s/secret.example.yaml`;
-4. заменить домен в `k8s/ingress.yaml`.
-
-## Публикация образа
-
-После размещения репозитория в GitHub тег вида `v0.1.0` запускает release workflow. Он публикует Docker-образ в GitHub Container Registry, откуда его сможет получить Kubernetes-кластер.
-
-## Возможности первой версии
-
-- health-check для мониторинга;
-- создание и просмотр задач;
-- PostgreSQL в отдельном контейнере;
-- запуск всего окружения одной командой.
+- проектирование REST API и ролевого доступа;
+- безопасную работу с паролями и секретами;
+- DevSecOps-процесс от тестов и сканирования до контейнерного образа;
+- наблюдаемость приложения через метрики и дашборды;
+- готовность сервиса к развёртыванию в Kubernetes.
