@@ -21,6 +21,10 @@
 
 ![Панель администратора — данные подключения и настройки ИИ скрыты](docs/screenshots/admin-redacted.png)
 
+## Видео-демо
+
+[Смотреть демонстрацию Task Manager](docs/demo-task-manager.mp4)
+
 ## Технологии
 
 - Python 3.12, FastAPI, SQLAlchemy, PostgreSQL;
