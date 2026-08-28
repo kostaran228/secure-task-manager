@@ -17,6 +17,8 @@
 - локальный текстовый и голосовой AI-помощник без передачи задач сторонним AI API;
 - Prometheus-метрики и Grafana-дашборды.
 
+![Рабочий экран задач](docs/screenshots/dashboard.png)
+
 ## Технологии
 
 - Python 3.12, FastAPI, SQLAlchemy, PostgreSQL;
