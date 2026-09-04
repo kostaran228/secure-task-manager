@@ -23,7 +23,7 @@ jobs:
       - name: Build application image
         run: docker build --tag secure-task-manager:scan .
       - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: secure-task-manager:scan
           format: table
